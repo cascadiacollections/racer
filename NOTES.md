@@ -164,6 +164,29 @@ dependencies are proptest and insta.
   is ever worse than base; upgrades that trade (§4.2) will need a
   per-upgrade report and maybe per-loadout calibration.
 
+## 4. M2a renderer (feature/renderer)
+
+Measured on the Pixel 10 (57220DLCR001SH), release export with
+`--features profiling`, DEMO driving, 80 two-second windows: raster (paint
+the canvas and lay out its buttons) mean 0.48 ms, worst window p95
+0.74 ms; whole `process` (sim ticks and the bot included) mean 2.0 ms;
+frames 16.67 ms, 60.0 fps, vsync-bound. Both sides of every fork were
+built before DEMO reached the fork.
+
+Decisions the plan left open:
+
+- **Camera**: 8 m up, 5 m back, focal 60 px; the horizon follows from
+  the car (14 rows above the HUD), so a taller phone shows more sky
+  rather than a smaller car. Hills are drawn at twice their height
+  (`Camera::hills`): at true scale the sim's 5-10 m hills flattened into a
+  few rows and crests did not read. Presentation only.
+- **Touch**: a finger on L or R that slides onto the other re-binds (one
+  thumb steers); everything else is Salt Line's capture on down.
+- **Palette**: a new sixteen-colour road palette, not Salt Line's.
+- **Keystore**: there is no `~/.android/debug.keystore` here; the
+  Justfile falls back to the editor's
+  `~/.local/share/godot/keystores/debug.keystore`.
+
 ---
 
 ## Sim epochs
