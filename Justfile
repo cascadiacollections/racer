@@ -41,6 +41,15 @@ digest:
 trackviz seed="1" index="0" branch="0" *flags:
     cargo run --release -p racer-sim --bin trackviz -- --seed {{ seed }} --index {{ index }} --branch {{ branch }} {{ flags }}
 
+# Regenerate the sounds and title music in art/audio (tools/gen_audio.py,
+# standard library only, byte-for-byte reproducible). Commit the result.
+gen-audio:
+    python3 tools/gen_audio.py
+
+# Fail unless art/audio is exactly what tools/gen_audio.py makes (CI runs it).
+check-audio:
+    python3 tools/gen_audio.py --check
+
 # Check advisories, licences, bans and sources (deny.toml). Needs cargo-deny.
 deny:
     cargo deny check

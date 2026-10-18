@@ -18,6 +18,8 @@ use godot::prelude::*;
 /// Godot class names (as `ClassDB` knows them, so `OS`, not `Os`).
 pub const REQUIRED: &[&str] = &[
     // Imported from `godot::classes` by this crate (the test checks these).
+    "AudioStream",
+    "AudioStreamPlayer",
     "CanvasItem",
     "ClassDB",
     "DisplayServer",
@@ -32,6 +34,7 @@ pub const REQUIRED: &[&str] = &[
     "InputEventScreenTouch",
     "Node2D",
     "ProjectSettings",
+    "ResourceLoader",
     "Time",
     // Reached without being named: the scene tree and window the node lives
     // in (`get_tree`, `get_window`, `make_input_local`) and what the texture
@@ -40,6 +43,9 @@ pub const REQUIRED: &[&str] = &[
     "Viewport",
     "Window",
     "Texture2D",
+    // What the imported `art/audio/*.wav` files load as (loop points and
+    // all, from tools/gen_audio.py).
+    "AudioStreamWAV",
     // The scripts: `godot/platform_services.gd` and the device_power addon
     // (`addons/device_power`).
     "GDScript",

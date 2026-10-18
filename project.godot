@@ -25,6 +25,13 @@ config/features=PackedStringArray("4.7", "GL Compatibility")
 ; screen, quit from the title) instead of closing the app from anywhere.
 config/quit_on_go_back=false
 
+[audio]
+
+; As in Salt Line: a game's sound uses iOS's Playback session category, not
+; Ambient, so it is heard with the silent switch on (for when racer ships on
+; iOS). Android plays on the media stream and its volume keys.
+general/ios/session_category=3
+
 [autoload]
 
 ; Power source, battery saver, thermal status and game mode, and the frame
