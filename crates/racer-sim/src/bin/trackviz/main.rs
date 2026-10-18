@@ -1,13 +1,18 @@
 //! Look at a track. DESIGN §2.
 //!
 //! ```text
-//! cargo run --release -p racer-sim --bin trackviz -- --fixture blind_crest --ascii
+//! cargo run --release -p racer-sim --bin trackviz -- --seed 7 --index 2 --branch 1 --ascii
+//! cargo run --release -p racer-sim --bin trackviz -- --seed 7 --index 2 --png out.png
 //! cargo run --release -p racer-sim --bin trackviz -- --fixture hazards --png out.png
 //! ```
 //!
-//! `--ascii` prints the strip chart from `racer_sim::viz`. `--png PATH`
-//! drives the track with the perfect bot and `--trials N` human-bot trials
-//! (default 8) and draws three panels:
+//! A track is either generated and proven by the solver (`--seed`, with
+//! `--index` and `--branch`, default 0 and 0) or a hand-written fixture
+//! (`--fixture NAME`). `--ascii` prints the strip chart from
+//! `racer_sim::viz`. `--png PATH` drives the track with the perfect bot and
+//! `--trials N` human-bot trials (default 8) on noise seeds the solver never
+//! used, with the loadout the timer was calibrated on, and draws three
+//! panels:
 //!
 //! 1. the track from above (the heading integrated from each segment's
 //!    turn), coloured by surface, with drift-required corners in red, crests
@@ -15,8 +20,11 @@
 //!    and the first human trial's path coloured by speed;
 //! 2. speed against distance: the perfect bot in white, the human trials in
 //!    orange, over the elevation profile in grey;
-//! 3. one bar group per section: each human trial's time lost to the
-//!    perfect bot there, in seconds (the grid lines are 1 s apart).
+//! 3. one bar group per checkpoint: each human trial's margin there in
+//!    orange (red when it fell short of the required margin, a red stub when
+//!    the timer ran out), the perfect bot's in white, and the required
+//!    margin as a green line; grid lines are 1 s apart. An untimed fixture
+//!    shows each trial's time lost to the perfect bot per section instead.
 //!
 //! It also prints the times. Exit status 2 on a bad flag.
 
@@ -31,7 +39,9 @@ use racer_sim::bot::perfect::perfect_run;
 use racer_sim::bot::{drive_traced, Trace};
 use racer_sim::car::CarParams;
 use racer_sim::dmath;
+use racer_sim::gen::difficulty::{required_margin, TRACKS};
 use racer_sim::race::Race;
+use racer_sim::solver::{build, Effort};
 use racer_sim::track::{fixtures, flags, Surface, Track, SEG_LEN};
 use racer_sim::viz::ascii_strip;
 use racer_sim::DT;
@@ -48,7 +58,9 @@ fn fixture(name: &str) -> Option<Track> {
 
 fn usage(msg: &str) -> ! {
     eprintln!("{msg}");
-    eprintln!("usage: trackviz --fixture NAME [--ascii] [--png PATH] [--trials N]");
+    eprintln!(
+        "usage: trackviz (--seed S [--index I] [--branch B] | --fixture NAME) [--ascii] [--png PATH] [--trials N]"
+    );
     std::process::exit(2);
 }
 
@@ -60,6 +72,7 @@ const BG: Rgb = [24, 24, 32];
 const PANEL: Rgb = [34, 34, 46];
 const WHITE: Rgb = [240, 240, 240];
 const ORANGE: Rgb = [250, 150, 40];
+const RED: Rgb = [220, 50, 50];
 
 fn surface_colour(s: Surface) -> Rgb {
     match s {
@@ -91,14 +104,17 @@ struct Drives {
     humans: Vec<(Race, Trace)>,
 }
 
-fn drive_all(track: &Arc<Track>, trials: u64) -> Drives {
-    let p = CarParams::BASE;
+/// Noise seeds for the pictured human trials, well away from the solver's.
+const PICTURE_SEEDS: u64 = 0x5049_4354_0000_0000;
+
+fn drive_all(track: &Arc<Track>, p: CarParams, trials: u64) -> Drives {
     let best = perfect_run(track, &p, true);
     let plan = HumanPlan::new(track, &p);
     let humans = (0..trials)
         .map(|seed| {
             let mut race = Race::new(track.clone(), p);
-            let trace = drive_traced(&mut race, &mut HumanBot::new(plan.clone(), seed));
+            let bot = &mut HumanBot::new(plan.clone(), PICTURE_SEEDS + seed);
+            let trace = drive_traced(&mut race, bot);
             (race, trace)
         })
         .collect();
@@ -155,7 +171,7 @@ fn draw_map(c: &mut Canvas, t: &Track, d: &Drives) {
         }
     }
     if let Some((_, trace)) = d.humans.first() {
-        let vmax = CarParams::BASE.vmax;
+        let vmax = d.perfect.params().vmax;
         for &(z, x, v) in &trace.samples {
             let (px, py) = at(z, x);
             c.disc(px, py, 1.2, ramp(v / vmax));
@@ -230,10 +246,13 @@ fn sections(r: &Race) -> Vec<f64> {
         .collect()
 }
 
-fn draw_bars(c: &mut Canvas, groups: &[Vec<f64>]) {
+/// One bar: its height in seconds and its colour.
+type Bar = (f64, Rgb);
+
+fn draw_bars(c: &mut Canvas, groups: &[Vec<Bar>], reference: Option<f64>) {
     let top = MAP_H + SPEED_H;
     c.rect(0, top, W - 1, top + BARS_H - 1, BG);
-    let max = groups.iter().flatten().fold(1.0f64, |m, &v| m.max(v));
+    let max = groups.iter().flatten().fold(1.0f64, |m, &(v, _)| m.max(v));
     let base = (top + BARS_H - 10) as f64;
     let unit = (BARS_H as f64 - 25.0) / max.ceil();
     for s in 0..=max.ceil() as i32 {
@@ -243,23 +262,34 @@ fn draw_bars(c: &mut Canvas, groups: &[Vec<f64>]) {
     let gw = (W as f64 - 40.0) / groups.len().max(1) as f64;
     for (g, bars) in groups.iter().enumerate() {
         let bw = (gw - 20.0) / bars.len().max(1) as f64;
-        for (b, &v) in bars.iter().enumerate() {
+        for (b, &(v, col)) in bars.iter().enumerate() {
             let x = 30.0 + g as f64 * gw + b as f64 * bw;
-            let col = if v < 0.0 { [220, 50, 50] } else { ORANGE };
+            let h = v.max(0.05) * unit;
             c.rect(
                 x as i32,
                 base as i32,
                 (x + bw - 2.0) as i32,
-                (base - v.max(0.05) * unit) as i32,
+                (base - h) as i32,
                 col,
             );
         }
     }
+    if let Some(m) = reference {
+        let y = base - m * unit;
+        c.line((20.0, y), (W as f64 - 20.0, y), 2.0, [60, 210, 80]);
+    }
+}
+
+/// The track to look at, and where it came from.
+enum Source {
+    Fixture(String),
+    Generated { seed: u64, index: u32, branch: u8 },
 }
 
 fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
-    let (mut track, mut ascii, mut png, mut trials) = (None, false, None, 8u64);
+    let (mut ascii, mut png, mut trials) = (false, None, 8u64);
+    let (mut seed, mut fixture_name, mut index, mut branch) = (None, None, 0u32, 0u8);
     let mut args = argv.iter();
     while let Some(flag) = args.next() {
         let mut value = || {
@@ -267,45 +297,100 @@ fn main() {
                 .cloned()
                 .unwrap_or_else(|| usage("missing value"))
         };
+        let bad = |what: &str| -> ! { usage(&format!("bad {what}")) };
         match flag.as_str() {
-            "--fixture" => {
-                track = Some(fixture(&value()).unwrap_or_else(|| usage("unknown fixture")))
-            }
+            "--fixture" => fixture_name = Some(value()),
+            "--seed" => seed = Some(value().parse().unwrap_or_else(|_| bad("--seed"))),
+            "--index" => index = value().parse().unwrap_or_else(|_| bad("--index")),
+            "--branch" => branch = value().parse().unwrap_or_else(|_| bad("--branch")),
             "--ascii" => ascii = true,
             "--png" => png = Some(value()),
-            "--trials" => trials = value().parse().unwrap_or_else(|_| usage("bad --trials")),
+            "--trials" => trials = value().parse().unwrap_or_else(|_| bad("--trials")),
             other => usage(&format!("unknown flag {other}")),
         }
     }
-    let track = Arc::new(track.unwrap_or_else(|| usage("no track chosen")));
+    let source = match (seed, fixture_name) {
+        (Some(seed), None) if index < TRACKS && branch < 2 && !(index == 0 && branch == 1) => {
+            Source::Generated { seed, index, branch }
+        }
+        (None, Some(name)) => Source::Fixture(name),
+        _ => usage("choose one track: --seed (index 0..4, branch 0..1; track 0 has no branch 1) or --fixture"),
+    };
+    let (track, params, margin) = match &source {
+        Source::Fixture(name) => {
+            let t = fixture(name).unwrap_or_else(|| usage("unknown fixture"));
+            (Arc::new(t), CarParams::BASE, None)
+        }
+        Source::Generated {
+            seed,
+            index,
+            branch,
+        } => {
+            let b = build(*seed, *index, *branch, Effort::default());
+            let r = &b.report;
+            println!(
+                "run seed {seed}, track {index}.{branch}: {:?}, calibrated on {}, perfect {:.2} s ({:.2} s left), human median {:.2} s, gap {:.1}%",
+                b.rung,
+                r.calibrated_on.describe(),
+                r.perfect_ticks as f64 * DT,
+                r.perfect_left as f64 * DT,
+                r.human_ticks as f64 * DT,
+                r.skill_gap * 100.0
+            );
+            let m = required_margin(*index) as f64 * DT;
+            (b.track, r.calibrated_on.params(), Some(m))
+        }
+    };
     if ascii || png.is_none() {
         print!("{}", ascii_strip(&track));
     }
     let Some(path) = png else { return };
 
-    let d = drive_all(&track, trials);
-    let best = sections(&d.perfect);
-    let groups: Vec<Vec<f64>> = (0..best.len())
-        .map(|k| {
-            d.humans
-                .iter()
-                .map(|(r, _)| sections(r).get(k).map_or(0.0, |s| s - best[k]))
+    let d = drive_all(&track, params, trials);
+    let groups: Vec<Vec<Bar>> = match margin {
+        Some(m) => (0..track.checkpoints().len())
+            .map(|k| {
+                let mut bars: Vec<Bar> = d
+                    .humans
+                    .iter()
+                    .map(|(r, _)| match r.margins().get(k) {
+                        Some(&t) if t as f64 * DT >= m => (t as f64 * DT, ORANGE),
+                        Some(&t) => (t as f64 * DT, RED),
+                        None => (0.0, RED),
+                    })
+                    .collect();
+                bars.push((
+                    d.perfect.margins().get(k).map_or(0.0, |&t| t as f64 * DT),
+                    WHITE,
+                ));
+                bars
+            })
+            .collect(),
+        None => {
+            let best = sections(&d.perfect);
+            (0..best.len())
+                .map(|k| {
+                    d.humans
+                        .iter()
+                        .map(|(r, _)| (sections(r).get(k).map_or(0.0, |s| s - best[k]), ORANGE))
+                        .collect()
+                })
                 .collect()
-        })
-        .collect();
+        }
+    };
     let mut human: Vec<u32> = d.humans.iter().map(|(r, _)| r.tick()).collect();
     human.sort_unstable();
     let p = d.perfect.tick() as f64 * DT;
     let med = human[human.len() / 2] as f64 * DT;
     println!(
-        "perfect {p:.2} s, human median {med:.2} s over {trials} trials, gap {:.1}%",
+        "pictured: perfect {p:.2} s, human median {med:.2} s over {trials} trials, gap {:.1}%",
         (med - p) / p * 100.0
     );
 
     let mut c = Canvas::new(W, MAP_H + SPEED_H + BARS_H, BG);
     draw_map(&mut c, &track, &d);
     draw_speed(&mut c, &track, &d);
-    draw_bars(&mut c, &groups);
+    draw_bars(&mut c, &groups, margin);
     std::fs::write(&path, png::encode(c.w as u32, c.h as u32, &c.px)).unwrap_or_else(|e| {
         eprintln!("writing {path}: {e}");
         std::process::exit(1);

@@ -1,10 +1,11 @@
 //! The hands both bots share: steering to a line, and picking a lane
 //! through traffic and roadside objects.
 //!
-//! **Steering** is a PD controller on the car's offset with a feedforward
-//! term. The road's push is known, `κ·v²` outward, so the controller asks
-//! for exactly that much plus a correction toward the target line, and
-//! divides by the steering authority to get a fraction of full lock. That
+//! **Steering** is a cascaded controller on the car's offset with a
+//! feedforward term. The road's push is known, `κ·v²` outward, so the
+//! controller asks for exactly that much plus what moves the car toward the
+//! target line at a capped sideways speed, and divides by the steering
+//! authority to get a fraction of full lock. That
 //! fraction is quantised to the seven levels a player has; the human bot
 //! adds hysteresis, holding its level until the wanted one is clearly
 //! different, which is what a thumb on a touch zone does.
@@ -32,11 +33,11 @@ pub const LANE_FRACTION: f64 = 2.0 / 3.0;
 const SIDE_MARGIN: f64 = 0.5;
 /// Longitudinal clearance kept from an obstacle, metres.
 const GAP_MARGIN: f64 = 2.0;
-/// A lane change must find the road across it clear for this long, s.
+/// A lane change across a lane must find that lane clear this long, s.
 const TRANSIT_TIME: f64 = 0.8;
-/// Closer than this, in seconds, to the obstacle ahead in a lane with no way
-/// round, the driver matches its speed.
-const FOLLOW_TIME: f64 = 2.0;
+/// With no free lane, the driver still moves over if another lane stays
+/// clear this many seconds longer than its own.
+const CHANGE_GAIN: f64 = 0.3;
 
 /// The centre of lane `lane` on road of half width `hw`.
 #[inline]
@@ -44,13 +45,22 @@ pub fn lane_x(lane: usize, hw: f64) -> f64 {
     (lane as f64 - 1.0) * hw * LANE_FRACTION
 }
 
-/// A PD steering controller quantised to the player's seven levels.
+/// A cascaded steering controller quantised to the player's seven levels.
+///
+/// The outer loop turns the offset error into a wanted sideways speed,
+/// capped so a lane change is brisk but never a lunge; the inner loop asks
+/// for the acceleration that reaches that speed, plus what the bend's push
+/// and the tyres' damping will take away. Capping the sideways speed is what
+/// keeps a driver acting on 150 ms old information from overshooting its
+/// lane.
 #[derive(Clone, Copy, Debug)]
 pub struct Steering {
-    /// Proportional gain on the offset error, 1/s².
-    pub kp: f64,
-    /// Derivative gain on the sideways speed, 1/s.
-    pub kd: f64,
+    /// Wanted sideways speed per metre of offset error, 1/s.
+    pub k_pos: f64,
+    /// Most sideways speed it asks for, m/s.
+    pub vx_max: f64,
+    /// Acceleration per m/s of sideways speed error, 1/s.
+    pub k_vel: f64,
     /// Levels the wanted steering must move by before the held level
     /// changes. 0.5 is plain rounding.
     pub hysteresis: f64,
@@ -59,18 +69,20 @@ pub struct Steering {
 
 impl Steering {
     /// A controller holding straight ahead.
-    pub const fn new(kp: f64, kd: f64, hysteresis: f64) -> Self {
+    pub const fn new(k_pos: f64, vx_max: f64, k_vel: f64, hysteresis: f64) -> Self {
         Steering {
-            kp,
-            kd,
+            k_pos,
+            vx_max,
+            k_vel,
             hysteresis,
             level: 0,
         }
     }
 
     /// The steering level that moves the car toward `target_x`, given its
-    /// offset `x`, sideways speed `vx`, speed `v`, the road's curvature and
-    /// the lateral grip `cap` available.
+    /// offset `x`, sideways speed `vx`, speed `v`, the road's curvature, the
+    /// lateral grip `cap` available and the tyres' damping `damp`.
+    #[allow(clippy::too_many_arguments)]
     pub fn level(
         &mut self,
         target_x: f64,
@@ -79,12 +91,14 @@ impl Steering {
         v: f64,
         curvature: f64,
         cap: f64,
+        damp: f64,
     ) -> i8 {
         let authority = cap * clamp(v / V_STEER_FULL, 0.0, 1.0);
         let want = if authority < 1e-6 {
             0.0
         } else {
-            let a = curvature * v * v + self.kp * (target_x - x) - self.kd * vx;
+            let vx_want = clamp(self.k_pos * (target_x - x), -self.vx_max, self.vx_max);
+            let a = curvature * v * v + damp * vx_want + self.k_vel * (vx_want - vx);
             clamp(a / authority * STEER_LEVELS as f64, -3.0, 3.0)
         };
         if abs(want - self.level as f64) > self.hysteresis {
@@ -140,7 +154,8 @@ pub fn obstacles(track: &Track, tick: u32, from: f64, to: f64, out: &mut Vec<Obs
 }
 
 /// Seconds until a car at `z` doing `v` reaches an obstacle overlapping the
-/// sideways band `lo..=hi`; 0 if one is alongside, infinity if none.
+/// sideways band `lo..=hi`, and that obstacle's speed; 0 if one is
+/// alongside, infinity if none.
 pub fn conflict_time(z: f64, v: f64, lo: f64, hi: f64, obs: &[Obstacle]) -> (f64, f64) {
     let mut first = (f64::INFINITY, f64::INFINITY);
     for o in obs {
@@ -169,45 +184,69 @@ pub fn conflict_time(z: f64, v: f64, lo: f64, hi: f64, obs: &[Obstacle]) -> (f64
 }
 
 /// The lane to drive in, and the speed to follow at if every lane is
-/// blocked. `lane` is the lane held now; `horizon` is how many seconds
-/// ahead the driver checks.
+/// blocked by traffic. `lane` is the lane held now; `bias` moves every lane
+/// toward the inside of a bend, as the driver will aim (see [`lane_pos`]);
+/// `horizon` is how many seconds ahead the driver checks. A roadside object is never followed: it
+/// does not move, so following it means stopping.
 pub fn choose_lane(
     lane: usize,
-    x: f64,
     z: f64,
     v: f64,
     hw: f64,
+    bias: f64,
     horizon: f64,
     obs: &[Obstacle],
 ) -> (usize, Option<f64>) {
     let in_lane = |l: usize| {
-        let lx = lane_x(l, hw);
+        let lx = lane_pos(l, hw, bias);
         conflict_time(z, v, lx, lx, obs)
     };
     let (t_here, follow) = in_lane(lane);
     if t_here > horizon {
         return (lane, None);
     }
-    // Free lanes, nearest first; the path across must be clear too.
-    let mut best: Option<(usize, f64)> = None;
+    // Other lanes, and how long each stays clear (capped at twice the
+    // horizon: beyond that, all are equal). A lane two over must have the
+    // one between clear for the crossing. The longest-clear wins, then the
+    // nearest, so the driver does not dart into a lane clear only for now.
+    let mut best: Option<(usize, f64, usize)> = None;
     for l in 0..LANES {
         if l == lane {
             continue;
         }
-        let lx = lane_x(l, hw);
-        let (t, _) = in_lane(l);
-        let (t_across, _) = conflict_time(z, v, x.min(lx), x.max(lx), obs);
-        if t > horizon && t_across > TRANSIT_TIME {
-            let d = abs(lx - x);
-            if best.is_none_or(|(_, bd)| d < bd) {
-                best = Some((l, d));
-            }
+        let between = (l.min(lane) + 1..l.max(lane)).all(|m| in_lane(m).0 > TRANSIT_TIME);
+        if !between {
+            continue;
+        }
+        let t = in_lane(l).0.min(2.0 * horizon);
+        let d = l.abs_diff(lane);
+        if best.is_none_or(|(_, bt, bd)| t > bt || (t == bt && d < bd)) {
+            best = Some((l, t, d));
         }
     }
     match best {
-        Some((l, _)) => (l, None),
-        None => (lane, (t_here < FOLLOW_TIME).then_some(follow)),
+        Some((l, t, _)) if t > horizon || t > t_here + CHANGE_GAIN => (l, None),
+        // Boxed in: match the traffic ahead, early enough to brake for it.
+        _ => (lane, (follow > 0.0).then_some(follow)),
     }
+}
+
+/// Where the driver aims in lane `lane`: its centre moved `bias` metres
+/// (toward the inside of a bend), kept clear of the road's edges.
+#[inline]
+pub fn lane_pos(lane: usize, hw: f64, bias: f64) -> f64 {
+    clamp(lane_x(lane, hw) + bias, -(hw - EDGE), hw - EDGE)
+}
+
+/// Closest the driver aims to the road's edge, metres.
+const EDGE: f64 = 1.2;
+
+/// Seconds until the car, where it is now, reaches traffic ahead, and that
+/// traffic's speed: what to brake for while a lane change is still under
+/// way.
+pub fn closing_on(z: f64, v: f64, x: f64, obs: &[Obstacle]) -> Option<(f64, f64)> {
+    let (t, speed) = conflict_time(z, v, x, x, obs);
+    (t.is_finite() && speed > 0.0).then_some((t, speed))
 }
 
 #[cfg(test)]
@@ -226,21 +265,30 @@ mod tests {
 
     #[test]
     fn steering_feeds_the_bend_forward() {
-        let mut s = Steering::new(0.0, 0.0, 0.5);
+        let mut s = Steering::new(0.0, 0.0, 0.0, 0.5);
         // On the line, the push outward is all there is to cancel.
-        assert_eq!(s.level(0.0, 0.0, 0.0, 30.0, 0.01, 27.0), 1);
-        assert_eq!(s.level(0.0, 0.0, 0.0, 30.0, 0.0, 27.0), 0);
+        assert_eq!(s.level(0.0, 0.0, 0.0, 30.0, 0.01, 27.0, 5.0), 1);
+        assert_eq!(s.level(0.0, 0.0, 0.0, 30.0, 0.0, 27.0, 5.0), 0);
         // Stopped, steering does nothing, so the controller does not ask.
-        assert_eq!(s.level(5.0, 0.0, 0.0, 0.0, 0.0, 20.0), 0);
+        assert_eq!(s.level(5.0, 0.0, 0.0, 0.0, 0.0, 20.0, 5.0), 0);
+    }
+
+    #[test]
+    fn a_lane_change_asks_for_capped_sideways_speed() {
+        let mut s = Steering::new(10.0, 1.0, 0.0, 0.5);
+        // Far or near, the wanted sideways speed is capped at 1 m/s, which
+        // the damping alone would take 5 m/s² to hold: 0.75 of a level.
+        assert_eq!(s.level(8.0, 0.0, 0.0, 20.0, 0.0, 20.0, 5.0), 1);
+        assert_eq!(s.level(80.0, 0.0, 0.0, 20.0, 0.0, 20.0, 5.0), 1);
     }
 
     #[test]
     fn hysteresis_holds_a_level_until_the_want_moves_clearly() {
-        let mut s = Steering::new(1.0, 0.0, 0.8);
-        assert_eq!(s.level(0.0, 0.0, 0.0, 20.0, 0.0, 20.0), 0);
-        // 1 m of error is 1 m/s², 0.15 of a level: held.
-        assert_eq!(s.level(1.0, 0.0, 0.0, 20.0, 0.0, 20.0), 0);
-        assert_eq!(s.level(10.0, 0.0, 0.0, 20.0, 0.0, 20.0), 2);
+        let mut s = Steering::new(1.0, 10.0, 0.0, 0.8);
+        assert_eq!(s.level(0.0, 0.0, 0.0, 20.0, 0.0, 20.0, 5.0), 0);
+        // 0.5 m of error asks 0.5 m/s, 2.5 m/s², under 0.4 of a level: held.
+        assert_eq!(s.level(0.5, 0.0, 0.0, 20.0, 0.0, 20.0, 5.0), 0);
+        assert_eq!(s.level(3.0, 0.0, 0.0, 20.0, 0.0, 20.0, 5.0), 2);
     }
 
     #[test]
@@ -249,11 +297,11 @@ mod tests {
         // Closing at 20 m/s on a car 60 m ahead: about 2.6 s away.
         let (t, v) = conflict_time(0.0, 40.0, 0.0, 0.0, &obs);
         assert!((2.0..3.0).contains(&t) && v == 20.0, "{t}");
-        let (lane, follow) = choose_lane(1, 0.0, 0.0, 40.0, 6.0, 3.0, &obs);
+        let (lane, follow) = choose_lane(1, 0.0, 40.0, 6.0, 0.0, 3.0, &obs);
         assert_ne!(lane, 1);
         assert_eq!(follow, None);
         // Far enough ahead, it stays put.
-        assert_eq!(choose_lane(1, 0.0, -200.0, 40.0, 6.0, 3.0, &obs), (1, None));
+        assert_eq!(choose_lane(1, -200.0, 40.0, 6.0, 0.0, 3.0, &obs), (1, None));
     }
 
     #[test]
@@ -263,7 +311,7 @@ mod tests {
             car_at(20.0, 0.0, 18.0),
             car_at(20.0, 4.0, 18.0),
         ];
-        let (lane, follow) = choose_lane(1, 0.0, 0.0, 30.0, 6.0, 3.0, &obs);
+        let (lane, follow) = choose_lane(1, 0.0, 30.0, 6.0, 0.0, 3.0, &obs);
         assert_eq!((lane, follow), (1, Some(18.0)));
     }
 
@@ -272,7 +320,24 @@ mod tests {
         // Blocked ahead in the left lane, a car alongside in the centre:
         // the right lane is free but only reachable through the centre.
         let obs = [car_at(30.0, -4.0, 10.0), car_at(0.0, 0.0, 30.0)];
-        let (lane, _) = choose_lane(0, -4.0, 0.0, 30.0, 6.0, 3.0, &obs);
+        let (lane, _) = choose_lane(0, 0.0, 30.0, 6.0, 0.0, 3.0, &obs);
         assert_eq!(lane, 0);
+    }
+
+    #[test]
+    fn a_post_row_at_the_edge_is_left_by_the_lane_beside_it() {
+        // Posts a metre inside the right edge pinch the right lane only.
+        let posts: Vec<Obstacle> = (0..6)
+            .map(|k| Obstacle {
+                z: 20.0 + 8.0 * k as f64,
+                speed: 0.0,
+                x: 5.0,
+                half_len: 0.25,
+                half_width: 0.25,
+            })
+            .collect();
+        assert_eq!(choose_lane(2, 0.0, 40.0, 6.0, 0.0, 3.0, &posts), (1, None));
+        // Aiming a metre inside a right-hander, the centre lane is clear too.
+        assert_eq!(choose_lane(1, 0.0, 40.0, 6.0, 1.0, 3.0, &posts), (1, None));
     }
 }

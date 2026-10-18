@@ -120,9 +120,11 @@ impl Race {
         }
     }
 
-    /// Spin the car if it overlaps an object or a traffic car. A rear-ended
-    /// car also takes the player down to below its own speed, so the player
-    /// comes out of the spin behind it rather than in it.
+    /// Spin the car if it overlaps an object or a traffic car. The car
+    /// glances off an object, pushed sideways clear of it, so a spin never
+    /// leaves it parked inside one. A rear-ended car also takes the player
+    /// down to below its own speed, so the player comes out of the spin
+    /// behind it rather than in it.
     fn collide(&mut self) {
         if self.car.spinning() {
             return;
@@ -130,7 +132,7 @@ impl Race {
         let (z, x) = (self.car.z, self.car.x);
         let seg = self.track.index_at(z);
         let near = self.track.objects_in(seg.saturating_sub(1), seg + 2);
-        let object = near.iter().any(|o| {
+        let object = near.iter().find(|o| {
             let r = o.kind.radius();
             crate::dmath::abs(z - o.z()) < CAR_LEN / 2.0 + r
                 && crate::dmath::abs(x - o.x()) < CAR_HALF_WIDTH + r
@@ -141,7 +143,16 @@ impl Race {
             .iter()
             .find(|c| c.hits(self.tick, z, x))
             .map(|c| c.speed());
-        if object || rear_ended.is_some() {
+        if let Some(o) = object {
+            let clear = o.kind.radius() + CAR_HALF_WIDTH + 0.05;
+            self.car.x = if x < o.x() {
+                o.x() - clear
+            } else {
+                o.x() + clear
+            };
+            self.car.vx = 0.0;
+        }
+        if object.is_some() || rear_ended.is_some() {
             self.hits += 1;
             self.car.spin();
         }
@@ -364,6 +375,15 @@ mod tests {
         // slow car ahead is caught.
         let clear = hold_lane(0.0, 5 * TICKS_PER_SEC);
         assert_eq!(clear.hits(), 0);
+    }
+
+    #[test]
+    fn an_object_hit_glances_the_car_clear_of_it() {
+        let race = hold_lane(4.0, 8 * TICKS_PER_SEC);
+        assert!(race.hits() >= 1);
+        // Pushed inward, clear of the post row at 4 m.
+        assert!(race.car().x < 4.0 - 1.1, "{}", race.car().x);
+        assert!(race.car().v > 0.0);
     }
 
     #[test]

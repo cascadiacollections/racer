@@ -623,6 +623,24 @@ impl Builder {
         self
     }
 
+    /// Keep only the objects for which `keep` is true.
+    pub fn retain_objects(&mut self, keep: impl FnMut(&Object) -> bool) -> &mut Self {
+        self.objects.retain(keep);
+        self
+    }
+
+    /// Move every traffic car that starts between `from` and `to` metres
+    /// `by` metres further up the road.
+    pub fn shift_traffic(&mut self, from: f64, to: f64, by: f64) -> &mut Self {
+        for c in &mut self.traffic {
+            let z = c.z0_dm as f64 / 10.0;
+            if (from..to).contains(&z) {
+                *c = TrafficCar::new(z + by, c.speed(), c.x());
+            }
+        }
+        self
+    }
+
     /// Finish: derive the track's elevation, sight lines, crests and object
     /// index.
     pub fn build(self) -> Track {

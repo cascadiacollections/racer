@@ -1,0 +1,15 @@
+---
+source: crates/racer-sim/tests/snapshots.rs
+expression: out
+---
+seed 1 track 0.0 Drawn(0)   9cf5fc3da02d045f
+seed 1 track 1.0 Drawn(2)   e8562b94f4af328c
+seed 1 track 1.1 Drawn(0)   a99f8fc1c58aaf12
+seed 1 track 2.0 Drawn(0)   aa6bf8053f63c983
+seed 1 track 2.1 Drawn(0)   a65e00b9f649b4ac
+seed 1 track 3.0 Drawn(0)   f441df1e0d2305fd
+seed 1 track 3.1 Drawn(0)   0582917e57a6dc72
+seed 1 track 4.0 Drawn(0)   1bc3076f744314b7
+seed 1 track 4.1 Drawn(1)   105565e0335a0898
+seed 2 track 4.0 Drawn(0)   4677ca13e68595c6
+seed 2 track 4.1 Repaired   0409561c60aece89

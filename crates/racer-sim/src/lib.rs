@@ -23,13 +23,16 @@
 pub mod bot; // the perfect and human-like drivers that prove a track
 pub mod car; // speed, offset, the drift state machine
 pub mod dmath; // platform-stable trig, so the sim never calls libm
+pub mod gen; // grammar, overlays, timer calibration
 pub mod hash; // FNV-1a, for track digests and the run state hash
 pub mod input; // one byte per tick: seven steer levels, brake, drift
 pub mod race; // one race: the car, the checkpoint timer, the input log
 pub mod replay; // input log -> verified reconstruction, and its text form
 pub mod rng; // SplitMix64, PCG32, named substreams
+pub mod solver; // calibrate, verify, and the reject/repair/fallback ladder
 pub mod track; // segments, checkpoints, sight lines, the builder
 pub mod traffic; // slow cars on closed-form schedules
+pub mod upgrade; // upgrades, loadouts, reachable loadouts per track
 pub mod viz; // ASCII strip of a track, for tuning and snapshots
 
 /// Fixed simulation timestep: 120 ticks a second. Never make this variable.

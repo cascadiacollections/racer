@@ -16,10 +16,10 @@
 
 use std::sync::Arc;
 
-use super::control::{choose_lane, lane_x, obstacles, Obstacle, Steering};
+use super::control::{choose_lane, closing_on, lane_pos, obstacles, Obstacle, Steering};
 use super::profile::{backward, drift_mask, limits, target_at};
 use super::{corners, drive_traced, Corner, Driver, Trace};
-use crate::car::{CarParams, Drift};
+use crate::car::{CarParams, Drift, DAMP_DRIFT, DAMP_GRIP};
 use crate::input::Input;
 use crate::race::{Phase, Race};
 use crate::track::{Track, SEG_LEN};
@@ -85,7 +85,7 @@ impl PerfectBot {
             profile: Vec::new(),
             decel,
             caution,
-            steer: Steering::new(14.0, 3.0, 0.5),
+            steer: Steering::new(3.0, 4.5, 10.0, 0.5),
             lane: 1,
             obs: Vec::new(),
         };
@@ -125,27 +125,32 @@ impl Driver for PerfectBot {
             car.z + car.v * HORIZON + 10.0,
             &mut self.obs,
         );
-        let (lane, follow) = choose_lane(self.lane, car.x, car.z, car.v, hw, HORIZON, &self.obs);
-        self.lane = lane;
-
         let corner = self.corner_of[i].map(|k| (k as usize, self.corners[k as usize]));
         let bias = corner.map_or(0.0, |(_, c)| c.sign * APEX);
-        let target_x = (lane_x(lane, hw) + bias).clamp(-(hw - 1.2), hw - 1.2);
+        let (lane, follow) = choose_lane(self.lane, car.z, car.v, hw, bias, HORIZON, &self.obs);
+        self.lane = lane;
+        let target_x = lane_pos(lane, hw, bias);
 
         let mut target_v = target_at(&self.profile, &self.limits, car.z, self.decel);
         if let Some(f) = follow {
             target_v = target_v.min(f - 0.5);
         }
+        // Still in the path of traffic mid lane change: brake in time for it.
+        if let Some((t, speed)) = closing_on(car.z, car.v, car.x, &self.obs) {
+            if t < (car.v - speed) / self.decel + 0.5 {
+                target_v = target_v.min(speed - 0.5);
+            }
+        }
         let brake = car.v > target_v + 0.1;
 
-        let cap = if car.drifting() {
-            p.drift_grip_on(&seg)
+        let (cap, damp) = if car.drifting() {
+            (p.drift_grip_on(&seg), DAMP_DRIFT)
         } else {
-            p.grip_on(&seg)
+            (p.grip_on(&seg), DAMP_GRIP)
         };
-        let mut level = self
-            .steer
-            .level(target_x, car.x, car.vx, car.v, seg.curvature(), cap);
+        let mut level =
+            self.steer
+                .level(target_x, car.x, car.vx, car.v, seg.curvature(), cap, damp);
         let drift = match corner {
             Some((k, c)) => self.drift[k] && i >= c.start && i < c.end,
             None => false,
@@ -183,6 +188,8 @@ pub struct PerfectRun {
     pub race: Race,
     /// Its trace.
     pub trace: Trace,
+    /// Ticks simulated, the search included.
+    pub cost: u64,
 }
 
 /// The perfect drive of `track`: with `allow_drift`, the best drift plan the
@@ -190,19 +197,27 @@ pub struct PerfectRun {
 /// test for drift-required corners (DESIGN §2.5).
 pub fn perfect_run(track: &Arc<Track>, params: &CarParams, allow_drift: bool) -> PerfectRun {
     let n_corners = corners(track, params).len();
-    let plan = if allow_drift && n_corners > 0 {
+    let (plan, searched) = if allow_drift && n_corners > 0 {
         search(track, params, n_corners)
     } else {
-        vec![false; n_corners]
+        (vec![false; n_corners], 0)
     };
     let mut bot = PerfectBot::new(track, params, plan.clone());
     let mut race = Race::new(track.clone(), *params);
     let trace = drive_traced(&mut race, &mut bot);
-    PerfectRun { plan, race, trace }
+    let cost = searched + race.tick() as u64;
+    PerfectRun {
+        plan,
+        race,
+        trace,
+        cost,
+    }
 }
 
-/// Beam search over drift choices, corner by corner.
-fn search(track: &Arc<Track>, params: &CarParams, n_corners: usize) -> Vec<bool> {
+/// Beam search over drift choices, corner by corner. Returns the best plan
+/// and the ticks simulated finding it.
+fn search(track: &Arc<Track>, params: &CarParams, n_corners: usize) -> (Vec<bool>, u64) {
+    let mut cost = 0;
     let root = PerfectBot::new(track, params, Vec::new());
     let starts: Vec<usize> = root
         .corners()
@@ -224,6 +239,7 @@ fn search(track: &Arc<Track>, params: &CarParams, n_corners: usize) -> Vec<bool>
                 while race.phase() == Phase::Racing && race.car().z < until {
                     let input = bot.input(&race);
                     race.step(input);
+                    cost += 1;
                 }
                 next.push((race, bot));
             }
@@ -234,7 +250,7 @@ fn search(track: &Arc<Track>, params: &CarParams, n_corners: usize) -> Vec<bool>
         next.truncate(BEAM);
         beam = next;
     }
-    beam.swap_remove(0).1.drift
+    (beam.swap_remove(0).1.drift, cost)
 }
 
 #[cfg(test)]

@@ -6,14 +6,20 @@
 //!
 //! - **Late.** It acts on what it saw [`DELAY`] ticks (150 ms) ago, give or
 //!   take [`JITTER`]: its own speed and slide, and the traffic.
-//! - **Short-sighted.** It plans over `min(1.2 s of travel, 120 m, the
-//!   crest's sight line)`. When a crest cuts the view short it assumes the
+//! - **Short-sighted.** It plans its speed over `min(1.2 s of travel,
+//!   120 m, the crest's sight line)`; traffic and objects it sees out to
+//!   `min(120 m, the sight line)`, since a car on the road ahead stands out
+//!   long before the bend it is on needs planning. When a crest cuts the view short it assumes the
 //!   unseen road might need [`BLIND_SPEED`], and slows for it.
 //! - **Careful.** It uses [`CAUTION`] of the tyres' grip and brakes for a
 //!   corner as if the brakes were [`PLAN_BRAKE`] as strong.
 //! - **Imprecise.** It aims up to a lane-quarter off its line, a fresh error
 //!   every half second, and holds a steering level until the one it wants is
 //!   clearly different (hysteresis, as a thumb on a touch zone does).
+//! - **Overconfident, now and then.** Each corner, with chance
+//!   [`OVERCOOK_CHANCE`] (drawn once per corner per trial), it misjudges the
+//!   speed and carries [`OVERCOOK`] times too much in, past what the tyres
+//!   can hold, and runs wide.
 //! - **Fallible.** Now and then ([`LAPSE_PER_SEC`]) it stops updating its
 //!   input for a moment and holds whatever it was doing.
 //! - **Plain.** It drifts only corners a person would: signed ones, and long
@@ -25,11 +31,11 @@
 
 use std::sync::Arc;
 
-use super::control::{choose_lane, lane_x, obstacles, Obstacle, Steering};
+use super::control::{choose_lane, closing_on, lane_pos, obstacles, Obstacle, Steering};
 use super::perfect::corner_index;
 use super::profile::{drift_mask, limits};
 use super::{corner_len, corners, Corner, Driver};
-use crate::car::{CarParams, Drift};
+use crate::car::{CarParams, Drift, DAMP_DRIFT, DAMP_GRIP};
 use crate::dmath::sqrt;
 use crate::input::Input;
 use crate::race::Race;
@@ -51,12 +57,16 @@ pub const BLIND_SPEED: f64 = 30.0;
 pub const CAUTION: f64 = 0.85;
 /// Braking it plans with, as a share of the brakes.
 pub const PLAN_BRAKE: f64 = 0.6;
+/// Chance per corner that it carries too much speed in.
+pub const OVERCOOK_CHANCE: f64 = 0.04;
+/// How much too much: a multiple of the speed it meant to take.
+pub const OVERCOOK: f64 = 1.15;
 /// Standard deviation of its aim, as a share of the road's half width.
 pub const AIM_SIGMA: f64 = 0.08;
 /// Ticks between fresh draws of aim error, delay and braking.
 pub const RESAMPLE: u32 = 60;
 /// Chance per second of a lapse.
-pub const LAPSE_PER_SEC: f64 = 0.005;
+pub const LAPSE_PER_SEC: f64 = 0.01;
 /// A lapse lasts this many ticks, low to high.
 pub const LAPSE_TICKS: (u32, u32) = (36, 96);
 /// It drifts a corner whose grip speed is below this, m/s ...
@@ -120,6 +130,8 @@ const MEMORY: usize = 32;
 #[derive(Clone, Debug)]
 pub struct HumanBot {
     plan: Arc<HumanPlan>,
+    /// The plan's limits with this driver's misjudgement of each corner.
+    limits: Vec<f64>,
     rng: Pcg32,
     memory: [Seen; MEMORY],
     delay: u32,
@@ -135,7 +147,8 @@ pub struct HumanBot {
 impl HumanBot {
     /// A driver following `plan`, its noise drawn from `seed`.
     pub fn new(plan: Arc<HumanPlan>, seed: u64) -> Self {
-        HumanBot {
+        let mut bot = HumanBot {
+            limits: plan.limits.clone(),
             plan,
             rng: Pcg32::new(seed),
             memory: [Seen::default(); MEMORY],
@@ -144,10 +157,19 @@ impl HumanBot {
             decel_share: PLAN_BRAKE,
             lapse: 0,
             last: Input::NEUTRAL,
-            steer: Steering::new(10.0, 3.0, 0.8),
+            steer: Steering::new(2.5, 3.5, 6.0, 0.8),
             lane: 1,
             obs: Vec::new(),
+        };
+        for k in 0..bot.plan.corners.len() {
+            if bot.rng.next_f64() < OVERCOOK_CHANCE {
+                let c = bot.plan.corners[k];
+                for l in &mut bot.limits[c.start..c.end] {
+                    *l *= OVERCOOK;
+                }
+            }
         }
+        bot
     }
 
     /// A roughly normal draw: four uniforms summed, centred and scaled to a
@@ -175,7 +197,7 @@ impl HumanBot {
         let last = track.index_at(seen.z + look);
         for j in i..=last {
             let d = (j as f64 * SEG_LEN - seen.z).max(0.0);
-            let lim = self.plan.limits[j];
+            let lim = self.limits[j];
             v = v.min(sqrt(lim * lim + 2.0 * decel * d));
         }
         if sight < wanted {
@@ -222,27 +244,38 @@ impl Driver for HumanBot {
             seen.z + look,
             &mut self.obs,
         );
-        let (lane, follow) = choose_lane(self.lane, seen.x, seen.z, seen.v, hw, HORIZON, &self.obs);
-        self.lane = lane;
-
         let corner = self.plan.corner_of[i].map(|k| (k as usize, self.plan.corners[k as usize]));
         let bias = corner.map_or(0.0, |(_, c)| c.sign * APEX);
-        let target_x = (lane_x(lane, hw) + bias + self.aim).clamp(-(hw - 1.0), hw - 1.0);
+        let (lane, follow) = choose_lane(self.lane, seen.z, seen.v, hw, bias, HORIZON, &self.obs);
+        self.lane = lane;
+        let target_x = lane_pos(lane, hw, bias) + self.aim;
 
         let mut target_v = self.target_speed(track, &seen, decel);
         if let Some(f) = follow {
             target_v = target_v.min(f - 1.0);
         }
+        // Still in the path of traffic mid lane change: brake in time for it.
+        if let Some((t, speed)) = closing_on(seen.z, seen.v, seen.x, &self.obs) {
+            if t < (seen.v - speed) / decel + 0.5 {
+                target_v = target_v.min(speed - 1.0);
+            }
+        }
         let brake = seen.v > target_v + 0.5;
 
-        let cap = if car.drifting() {
-            p.drift_grip_on(&seg)
+        let (cap, damp) = if car.drifting() {
+            (p.drift_grip_on(&seg), DAMP_DRIFT)
         } else {
-            p.grip_on(&seg)
+            (p.grip_on(&seg), DAMP_GRIP)
         };
-        let mut level = self
-            .steer
-            .level(target_x, seen.x, seen.vx, seen.v, seg.curvature(), cap);
+        let mut level = self.steer.level(
+            target_x,
+            seen.x,
+            seen.vx,
+            seen.v,
+            seg.curvature(),
+            cap,
+            damp,
+        );
         let drift = match corner {
             Some((k, c)) => self.plan.drift[k] && i >= c.start && i < c.end,
             None => false,

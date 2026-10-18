@@ -7,6 +7,9 @@
 //! same (DESIGN §2.2). Property tests check the rules; this checks the
 //! promise.
 
+mod common;
+
+use racer_sim::solver::{build, Effort};
 use racer_sim::track::{fixtures, track_hash};
 use racer_sim::viz::ascii_strip;
 
@@ -30,5 +33,25 @@ fn fixture_digests_are_pinned() {
     .iter()
     .map(|(name, t)| format!("{name:<18} {:016x}\n", track_hash(t)))
     .collect();
+    insta::assert_snapshot!(out);
+}
+
+/// Digests of generated, calibrated tracks: every track of run seed 1 and
+/// the last fork of seed 2. These are what seed sharing promises — the same
+/// seed is the same track, timer included, on every platform and build —
+/// and CI runs this on Linux, macOS and Windows. They are folded into the
+/// epoch digest too (`golden_runs.rs`), so a change here needs a
+/// `SIM_EPOCH` bump (DESIGN §8.3).
+#[test]
+fn generated_track_digests_are_pinned() {
+    let mut out = String::new();
+    for (seed, index, branch) in common::pinned_tracks() {
+        let b = build(seed, index, branch, Effort::default());
+        out.push_str(&format!(
+            "seed {seed} track {index}.{branch} {:<10} {:016x}\n",
+            format!("{:?}", b.rung),
+            track_hash(&b.track)
+        ));
+    }
     insta::assert_snapshot!(out);
 }

@@ -81,11 +81,11 @@ pub const BOOST_ACC: f64 = 8.0;
 pub const BOOST_VMAX: f64 = 6.0;
 
 /// Ticks a spin lasts, with no control.
-pub const SPIN_TICKS: u8 = 60;
+pub const SPIN_TICKS: u8 = 90;
 /// Speed kept when a spin starts.
-pub const SPIN_KEEP: f64 = 0.45;
+pub const SPIN_KEEP: f64 = 0.15;
 /// Deceleration while spinning, m/s².
-pub const SPIN_DECEL: f64 = 6.0;
+pub const SPIN_DECEL: f64 = 8.0;
 
 /// Off the road (inside the verge): grip, top speed and extra drag.
 pub const OFFROAD_GRIP: f64 = 0.75;
