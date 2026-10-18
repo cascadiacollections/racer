@@ -1,0 +1,24 @@
+[package]
+publish = false
+name = "racer-godot"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+# The GDExtension Godot loads.
+crate-type = ["cdylib"]
+
+[dependencies]
+# `api-4-7` pins the GDExtension API level to the engine this project
+# targets (Godot 4.7.2, as Salt Line). Without it the bindings build against
+# the newest API the crate knows about, and the extension silently refuses
+# to load on 4.7.2. Building down-level still runs on newer engines.
+#
+# `lazy-function-tables` looks engine methods up on first call instead of all
+# of them at load, so the extension still loads on a stripped engine build
+# that lacks classes the game never touches (Salt Line's Android release
+# does this). The table is not thread-safe: no engine call may be made off
+# the main thread.
+godot = { version = "0.5", features = ["api-4-7", "lazy-function-tables"] }
+racer-sim = { path = "../racer-sim" }

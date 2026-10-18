@@ -1,6 +1,10 @@
 default:
     @just --list
 
+# Build the GDExtension stub (DESIGN §6).
+build:
+    cargo build -p racer-godot
+
 # Unit, property, snapshot and golden-run tests.
 test:
     cargo test --workspace

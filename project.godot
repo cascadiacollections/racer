@@ -1,0 +1,18 @@
+; racer — Godot 4 project (M1 stub).
+;
+; The project root is the repository root, as in Salt Line. M1 has no scene:
+; the extension registers one node, SimInfo, to prove it loads. The portrait
+; layout, palette and filtering rules arrive with the renderer in M2
+; (DESIGN §5).
+
+config_version=5
+
+[application]
+
+config/name="racer"
+config/features=PackedStringArray("4.7", "GL Compatibility")
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"

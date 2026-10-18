@@ -46,6 +46,8 @@ jobs:
         run: cargo nextest run -p racer-sim --profile ci
       - name: doctests
         run: cargo test --doc --workspace
+      - name: build the GDExtension
+        run: cargo build -p racer-godot
       - name: determinism digest
         shell: bash
         env:
