@@ -20,8 +20,10 @@
 //! 4 m segments whose shape is stored as small integers, so a track is the
 //! same on every platform by construction, not by luck of float rounding.
 
+pub mod car; // speed, offset, the drift state machine
 pub mod dmath; // platform-stable trig, so the sim never calls libm
 pub mod hash; // FNV-1a, for track digests and the run state hash
+pub mod input; // one byte per tick: seven steer levels, brake, drift
 pub mod rng; // SplitMix64, PCG32, named substreams
 pub mod track; // segments, checkpoints, sight lines, the builder
 pub mod viz; // ASCII strip of a track, for tuning and snapshots
