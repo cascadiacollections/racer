@@ -47,8 +47,10 @@ deny:
 
 # ------------------------------------------------------------------ Android
 #
-# Official Godot 4.7.2 templates, no Gradle, arm64 only. Always the SDK's
-# adb: mixing it with a system adb kills the server.
+# Godot 4.7.2's Gradle build template, arm64 only; release exports carry
+# racer's stripped engine when tools/godot_templates.lock.json pins one
+# (docs/godot-templates.md). Always the SDK's adb: mixing it with a system
+# adb kills the server.
 
 android_sdk := env("ANDROID_HOME", home_directory() / "Android/Sdk")
 android_ndk := env("ANDROID_NDK_HOME", `ls -d "${ANDROID_HOME:-$HOME/Android/Sdk}"/ndk/* 2>/dev/null | sort -V | tail -1`)
@@ -70,18 +72,20 @@ android-lib profile="debug" features="":
     "{{ android_bin }}/llvm-strip" --strip-debug target/aarch64-linux-android/{{ profile }}/libracer_godot.so
 
 # Unpack Godot's official Android build template into android/build, which
-# Gradle exports need (and which bundles the device_power Kotlin plugin).
-# Re-run after a Godot upgrade; android/build is not tracked.
+# Gradle exports need (and which bundles the device_power Kotlin plugin), and
+# put the stripped engine the lock pins into its release AAR. Without a
+# usable pin it keeps the official engine and prints a loud warning;
+# STRIPPED_ENGINE=off forces the official one. Re-run after a Godot upgrade;
+# android/build is not tracked.
 android-template:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    src="${GODOT_TEMPLATES:-$HOME/.local/share/godot/export_templates/4.7.2.stable}/android_source.zip"
-    [ -f "$src" ] || { echo "missing $src: install Godot's 4.7.2 export templates" >&2; exit 1; }
-    rm -rf android/build && mkdir -p android/build
-    unzip -q "$src" -d android/build
-    touch android/build/.gdignore
-    echo "4.7.2.stable" > android/.build_version
-    chmod +x android/build/gradlew
+    python3 tools/godot_template.py prepare-android
+
+# Build racer's stripped Godot engine (Android arm64) from source into
+# build/godot-templates (docs/godot-templates.md). Needs uv (it runs the pinned
+# SCons) and the Android SDK; about 3 minutes on 16 cores. `lock --dir` then
+# pins it locally to try on a phone (never commit that lock).
+godot-template *args:
+    ANDROID_HOME="{{ android_sdk }}" python3 tools/godot_template.py build {{ args }}
 
 # Export the APK to build/racer.apk: a debug export, or with
 # profile=release a release export signed with the same debug key. A Gradle
@@ -99,8 +103,12 @@ android-apk profile="debug" features="": build (android-lib profile features)
     export GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD="${GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD:-android}"
     bash tools/godot_headless.sh --frame-delay 800 --import
     [ -f android/.build_version ] || { echo "run 'just android-template' first" >&2; exit 1; }
+    # Re-select the engine on every release export, so a lock change (or
+    # STRIPPED_ENGINE=off) takes effect without re-unpacking the template.
+    {{ if profile == "release" { "python3 tools/godot_template.py engine" } else { "" } }}
     bash tools/godot_headless.sh --export-{{ profile }} "Android" build/racer.apk
     ls -l build/racer.apk
+    unzip -lv build/racer.apk 'lib/*/libgodot_android.so' | tail -n +4 | head -n 1
 
 # Build, install and launch on the attached device.
 android profile="debug" features="": (android-apk profile features)
