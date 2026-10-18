@@ -31,6 +31,7 @@ pub const REQUIRED: &[&str] = &[
     "InputEventScreenDrag",
     "InputEventScreenTouch",
     "Node2D",
+    "ProjectSettings",
     "Time",
     // Reached without being named: the scene tree and window the node lives
     // in (`get_tree`, `get_window`, `make_input_local`) and what the texture

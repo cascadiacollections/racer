@@ -35,6 +35,7 @@ use racer_sim::bot::human::{HumanBot, HumanPlan};
 use racer_sim::bot::Driver;
 use racer_sim::gen::difficulty::TRACKS;
 use racer_sim::input::Input;
+use racer_sim::replay::{encode_run, Ending, Replay, RunFile};
 use racer_sim::rng::{mix64, substream};
 use racer_sim::run::{RunPhase, RunState, TrackCache};
 use racer_sim::track::{fixtures, Track};
@@ -83,6 +84,10 @@ pub enum Effect {
     KeepScreenOn(bool),
     /// Leave the game.
     Quit,
+    /// Keep a finished or abandoned player run for playtest analysis:
+    /// write `text` (racer_sim::replay::encode_run) as file `name` in the
+    /// runs directory. Never for DEMO.
+    SaveRun { name: String, text: String },
 }
 
 /// The DEMO driver.
@@ -314,6 +319,22 @@ impl Game {
         self.fx.push(Effect::Redraw);
     }
 
+    /// Queue the current run for saving, unless DEMO drove it.
+    fn save_run(&mut self, ending: Ending) {
+        let (Some(run), None) = (&self.run, &self.demo) else {
+            return;
+        };
+        let f = RunFile {
+            epoch: racer_sim::SIM_EPOCH,
+            ending,
+            replay: Replay::of(run),
+        };
+        self.fx.push(Effect::SaveRun {
+            name: format!("run-{:016x}.txt", f.replay.run_seed),
+            text: encode_run(&f),
+        });
+    }
+
     fn go_to_title(&mut self) {
         self.mode = Mode::Title;
         self.paused = false;
@@ -382,6 +403,7 @@ impl Game {
             if confirm || self.touch.pressed(Action::Resume) {
                 self.set_paused(false);
             } else if self.touch.pressed(Action::Quit) {
+                self.save_run(Ending::Quit);
                 self.go_to_title();
             }
             return;
@@ -425,9 +447,15 @@ impl Game {
                 self.fx.push(Effect::KeepScreenOn(false));
             }
             RunPhase::Won | RunPhase::Lost => {
+                let ending = if run.phase() == RunPhase::Won {
+                    Ending::Won
+                } else {
+                    Ending::Lost
+                };
                 self.mode = Mode::Results;
                 self.touch.release_all();
                 self.fx.push(Effect::KeepScreenOn(false));
+                self.save_run(ending);
             }
         }
     }
