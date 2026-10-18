@@ -182,10 +182,10 @@ only release templates are built.
    that does not match the current key, or pins nothing, is a warning
    annotation on every run; a lock written from a local build fails.
 
-racer's CI does not export an APK yet. When it does, its Android job should
-run `godot_template.py engine` (with `--require` on release tags) after
-installing the templates, and honour a `vars.STRIPPED_ENGINE` off switch as
-Salt Line's `ci.yml` does.
+5. **Export.** The `ci.yml` `android` job runs `godot_template.py
+   prepare-android` after installing the templates, with `--require` on
+   pushes to main (the builds `dev release` publishes), and honours a
+   `vars.STRIPPED_ENGINE` off switch as Salt Line's `ci.yml` does.
 
 ## Bumping Godot
 
