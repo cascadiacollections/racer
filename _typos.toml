@@ -1,0 +1,4 @@
+# typos (https://github.com/crate-ci/typos). Snapshot files are generated hex
+# digests and track strips, not prose; the golden-run corpus is input logs.
+[files]
+extend-exclude = ["*.snap", "golden_runs.txt", "proptest-regressions/", "*.proptest-regressions"]

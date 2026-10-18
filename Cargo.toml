@@ -1,0 +1,23 @@
+[workspace]
+resolver = "2"
+members = ["crates/racer-sim"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[profile.release]
+lto = true
+codegen-units = 1
+# The default, spelled out because it is load-bearing: gdext catches a panic
+# in a Godot callback by unwinding, so the game survives long enough to show
+# an error. With `abort` a panic would take the whole process down.
+panic = "unwind"
+
+# Track generation runs bots over every track it builds (DESIGN §2.4), so an
+# unoptimised sim makes the test suite crawl. Optimise the sim in dev and test
+# builds while keeping debug assertions and overflow checks on, so the tests
+# still catch an overflow.
+[profile.dev.package.racer-sim]
+opt-level = 2

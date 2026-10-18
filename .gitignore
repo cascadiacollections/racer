@@ -1,0 +1,4 @@
+/target
+**/*.rs.bk
+.godot/
+.DS_Store

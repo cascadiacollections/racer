@@ -1,0 +1,16 @@
+[package]
+publish = false
+name = "racer-sim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Deliberately dependency-free. Ask before adding anything here — the crate must
+# build and test headless with no engine present.
+[dependencies]
+
+[dev-dependencies]
+insta = "1"
+# Test-only: property tests (tests/properties.rs). The sim itself still has no
+# dependencies, so nothing here reaches a build of the game.
+proptest = { version = "1", default-features = false, features = ["std"] }
