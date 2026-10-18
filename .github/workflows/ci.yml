@@ -48,6 +48,11 @@ jobs:
         run: cargo test --doc --workspace
       - name: build the GDExtension
         run: cargo build -p racer-godot
+      # The renderer, the projection, touch and the game core are
+      # engine-free and tested without Godot; the golden frame digests must
+      # agree on every platform.
+      - name: test racer-godot (no Godot installed)
+        run: cargo test -p racer-godot
       - name: determinism digest
         shell: bash
         env:

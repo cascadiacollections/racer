@@ -1,11 +1,31 @@
-//! Godot 4 presentation layer for racer. M1: a stub that proves the
-//! extension builds and loads. DESIGN §6.
+//! Godot 4 presentation layer for racer: the pseudo-3D renderer, the
+//! portrait layout, touch, keys and pad, and the game's screens. No game
+//! rules: everything that decides anything is in `racer-sim`, which has no
+//! idea this crate exists (DESIGN §6).
 //!
-//! Everything that decides anything is in `racer-sim`, which has no idea
-//! this crate exists. In M2 this crate grows the pseudo-3D software
-//! renderer, the portrait layout, touch zones and pad input (DESIGN §5); for
-//! now it registers one node, [`SimInfo`], which reports the sim epoch the
-//! build carries, so a scene can check it is talking to the sim it expects.
+//! Built the way Salt Line is built. Follow one frame: [`game`]'s `process`
+//! gathers input into [`input::Intents`], hands it to [`app::Game`], applies
+//! the [`app::Effect`]s that come back, and if [`frame::Redraw`] says the
+//! frame changed, [`screens`] (with [`render`]) paints the game into one
+//! [`raster::Canvas`], which is uploaded as one texture.
+//!
+//! ```text
+//! adapter    game           the one Godot node (Racer): engine events in, effects out
+//! core       app            modes, the run, pause, DEMO (engine-free)
+//!            input, touch   bindings and quantisation; on-screen buttons
+//!            builder        tracks built on a worker thread
+//! drawing    project        the pseudo-3D road projection, pinned in metres
+//!            render         a race painted: road, sprites, car, HUD, pad
+//!            screens        title, fork cards, results, pause; their buttons
+//!            raster, font,  the canvas, the bitmap fonts, the 16 colours,
+//!            palette,       procedural placeholder sprites at fixed sizes
+//!            sprites
+//! pacing     frame, layout  redraw flag, menu frame cap; the portrait layout
+//! dev        profiling      opt-in (`--features profiling`) frame timing
+//! ```
+//!
+//! Everything but `game` (and `lib`) is engine-free and runs under
+//! `cargo test`.
 
 use godot::prelude::*;
 
@@ -13,9 +33,12 @@ pub mod app;
 pub mod builder;
 pub mod font;
 pub mod frame;
+pub mod game;
 pub mod input;
 pub mod layout;
 pub mod palette;
+#[cfg(feature = "profiling")]
+pub mod profiling;
 pub mod project;
 pub mod raster;
 pub mod render;
@@ -27,43 +50,3 @@ struct RacerExtension;
 
 #[gdextension]
 unsafe impl ExtensionLibrary for RacerExtension {}
-
-/// Reports the simulation's version: `SIM_EPOCH` and the digest it vouches
-/// for (DESIGN §8.3). Prints both when it enters the tree.
-#[derive(GodotClass)]
-#[class(base = Node)]
-pub struct SimInfo {
-    base: Base<Node>,
-}
-
-#[godot_api]
-impl SimInfo {
-    /// The sim's outcome version: a replay recorded under another epoch is
-    /// not replayed.
-    #[func]
-    fn sim_epoch(&self) -> i64 {
-        racer_sim::SIM_EPOCH as i64
-    }
-
-    /// The digest the epoch names, as hex text (Godot has no unsigned
-    /// 64-bit integer).
-    #[func]
-    fn epoch_digest(&self) -> GString {
-        format!("{:#018x}", racer_sim::EPOCH_DIGEST).as_str().into()
-    }
-}
-
-#[godot_api]
-impl INode for SimInfo {
-    fn init(base: Base<Node>) -> Self {
-        SimInfo { base }
-    }
-
-    fn ready(&mut self) {
-        godot_print!(
-            "racer sim epoch {} ({:#018x})",
-            racer_sim::SIM_EPOCH,
-            racer_sim::EPOCH_DIGEST
-        );
-    }
-}
