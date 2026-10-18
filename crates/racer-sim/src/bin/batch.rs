@@ -183,7 +183,7 @@ fn main() {
     let mut crash_prone = 0;
     let (mut undrivable, mut perfect_failed, mut band, mut gap_fail, mut drift_fail, mut margins) =
         (0, 0, 0, 0, 0, 0);
-    let mut per_index: Vec<Vec<&Built>> = vec![Vec::new(); TRACKS as usize];
+    let mut per_index: Vec<Vec<(&Built, f64)>> = vec![Vec::new(); TRACKS as usize];
     let mut cost_ticks = Vec::new();
     let mut secs = Vec::new();
     for (n, r) in results.iter().enumerate() {
@@ -208,8 +208,10 @@ fn main() {
                         Failure::Margins { .. } => margins += 1,
                     }
                 }
-                if !matches!(b.rung, Rung::Unvalidated) {
-                    per_index[index].push(b);
+                // The bands bind drawn and repaired tracks; the fallback is
+                // allowed to be easy, so it is counted above, not here.
+                if matches!(b.rung, Rung::Drawn(_) | Rung::Repaired) {
+                    per_index[index].push((b, *t));
                 }
                 cost_ticks.push(b.report.cost as f64);
                 secs.push(*t);
@@ -245,34 +247,32 @@ fn main() {
     println!(
         "  rejected candidates: undrivable {undrivable}, crash-prone {crash_prone}, perfect failed {perfect_failed}, perfect band {band}, skill gap {gap_fail}, drift corner {drift_fail}, margins {margins}"
     );
-    println!("\nper track index (accepted tracks):");
+    println!("\nper track index (drawn and repaired tracks; fallbacks are exempt from the bands):");
     println!(
-        "  idx  n    perfect left s (min/mean/max)   skill gap % (min/mean/max)   worst human margin s   human s  perfect s"
+        "  idx    n  loadouts  perfect left s       skill gap %          fewest   human  perfect   cost per track"
+    );
+    println!(
+        "                      min  mean   max     min  mean   max     passes   mean s  mean s    Mticks    ms"
     );
     for (i, bs) in per_index.iter().enumerate() {
         if bs.is_empty() {
             continue;
         }
-        let left: Vec<f64> = bs
+        let of = |f: &dyn Fn(&Built) -> f64| -> Vec<f64> { bs.iter().map(|(b, _)| f(b)).collect() };
+        let l = spread(&of(&|b| b.report.perfect_left as f64 * DT));
+        let g = spread(&of(&|b| b.report.skill_gap * 100.0));
+        let fewest = bs
             .iter()
-            .map(|b| b.report.perfect_left as f64 * DT)
-            .collect();
-        let gap: Vec<f64> = bs.iter().map(|b| b.report.skill_gap * 100.0).collect();
-        let worst: Vec<f64> = bs
-            .iter()
-            .map(|b| b.report.worst_margin as f64 * DT)
-            .collect();
-        let human: Vec<f64> = bs
-            .iter()
-            .map(|b| b.report.human_ticks as f64 * DT)
-            .collect();
-        let perfect: Vec<f64> = bs
-            .iter()
-            .map(|b| b.report.perfect_ticks as f64 * DT)
-            .collect();
-        let (l, g, w) = (spread(&left), spread(&gap), spread(&worst));
+            .map(|(b, _)| b.report.fewest_passes)
+            .min()
+            .unwrap_or(0);
+        let human = spread(&of(&|b| b.report.human_ticks as f64 * DT)).1;
+        let perfect = spread(&of(&|b| b.report.perfect_ticks as f64 * DT)).1;
+        let loadouts = spread(&of(&|b| b.report.loadouts as f64)).2;
+        let cost = spread(&of(&|b| b.report.cost as f64 / 1e6)).1;
+        let ms = bs.iter().map(|(_, t)| t * 1000.0).sum::<f64>() / bs.len() as f64;
         println!(
-            "  {i}  {:>4}   {:>5.1} {:>5.1} {:>5.1}            {:>5.1} {:>5.1} {:>5.1}              min {:>5.2}           {:>5.1}    {:>5.1}",
+            "  {i}   {:>4}  {loadouts:>5}    {:>5.1} {:>5.1} {:>5.1}   {:>5.1} {:>5.1} {:>5.1}    {fewest:>2}/{k}    {human:>5.1}   {perfect:>5.1}    {cost:>6.2}  {ms:>5.0}",
             bs.len(),
             l.0,
             l.1,
@@ -280,16 +280,13 @@ fn main() {
             g.0,
             g.1,
             g.2,
-            w.0,
-            spread(&human).1,
-            spread(&perfect).1
         );
     }
 
     let drift: Vec<_> = per_index
         .iter()
         .flatten()
-        .flat_map(|b| b.report.drift.iter())
+        .flat_map(|(b, _)| b.report.drift.iter())
         .collect();
     let tightened = drift.iter().filter(|d| d.repairs > 0).count();
     let grip_failed = drift.iter().filter(|d| d.grip_failed).count();
