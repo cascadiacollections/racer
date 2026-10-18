@@ -66,11 +66,67 @@ jobs:
           name: digest-${{ matrix.os }}
           path: digest-${{ matrix.os }}.txt
 
-  # The same 200 runs must reach the same digest on every platform. Android
-  # and iOS join in M2, as in Salt Line, once the game ships there.
+  # Android: the determinism corpus on a real Android userland (bionic). An
+  # arm64 emulator on an x86_64 host is unaccelerated and far too slow, so
+  # this runs the x86_64-linux-android build on an x86_64 emulator; the arm64
+  # build the APK ships is checked on a phone with `just android-digest`
+  # (NOTES.md). Ported from Salt Line's `sim-android`. Only the
+  # dependency-free sim crate is built, so there is no rust-cache here.
+  sim-android:
+    name: sim (android x86_64 emulator)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable  # the pinned channel still comes from rust-toolchain.toml
+      - name: build the determinism check for Android (x86_64)
+        run: |
+          set -eu
+          rustup target add x86_64-linux-android
+          bin="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          cargo build --release -q -p racer-sim --bin determinism --target x86_64-linux-android \
+            --config "target.x86_64-linux-android.linker=\"$bin/x86_64-linux-android24-clang\""
+      - name: enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      # The action runs each line of `script` on its own through sh, so the
+      # whole check is one line that writes to a file; the next step reads it.
+      # aosp_atd is the headless test image, the quickest to boot.
+      - name: determinism digest (emulator)
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 35
+          target: aosp_atd
+          arch: x86_64
+          disable-animations: false
+          script: bash tools/android_digest.sh target/x86_64-linux-android/release/determinism > digest.txt
+      # Shown even when the run failed: its summary went to the file.
+      - name: show the emulator's output
+        if: always()
+        run: cat digest.txt || true
+      - name: extract the digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q '^os: *android$' digest.txt
+          grep -oE 'digest: 0x[0-9a-f]+' digest.txt | cut -d' ' -f2 > digest-android-x86_64.txt
+          cat digest-android-x86_64.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: digest-android-x86_64
+          path: digest-android-x86_64.txt
+
+  # The same 200 runs must reach the same digest on every platform: the OS
+  # matrix and the Android emulator (iOS joins once the game ships there).
   determinism:
     name: determinism across platforms
-    needs: sim
+    needs: [sim, sim-android]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -92,9 +148,9 @@ jobs:
               echo "malformed digest in $f" >&2
             fi
           done
-          # One per `sim` matrix entry; keep in step with that job.
-          if [ "$found" -ne 3 ]; then
-            echo "expected 3 platform digests, got $found" >&2
+          # One per `sim` matrix entry plus `sim-android`; keep in step.
+          if [ "$found" -ne 4 ]; then
+            echo "expected 4 platform digests, got $found" >&2
             exit 1
           fi
           if [ "$(cat digest-*.txt | sort -u | wc -l)" -ne 1 ]; then
