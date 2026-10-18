@@ -217,7 +217,87 @@ fn hill_height(x: i32) -> i32 {
     4 + (tri(x, 157) * 14 + tri(x + 40, 61) * 7 + tri(x + 13, 23) * 2) / 64
 }
 
-/// Sky, hills, then the road row by row.
+/// Height of the near, green hills at background column `x`, pixels: lower
+/// and rounder than the far range, so the two read as separate distances.
+fn near_hill_height(x: i32) -> i32 {
+    let bump = |x: i32, p: i32| -> i32 {
+        // A parabola per period: rounded tops, sharp valleys.
+        let m = x.rem_euclid(p) - p / 2;
+        (p * p / 4 - m * m) * 64 / (p * p / 4)
+    };
+    1 + (bump(x, 97) * 5 + bump(x + 31, 53) * 3) / 64
+}
+
+/// One cloud: a few overlapping ellipses, in sky coordinates where x is a
+/// background column (repeating every [`CLOUD_PERIOD`]) and y is a fraction
+/// of the sky's height in 1/64ths.
+struct Cloud {
+    /// Centres and radii `(cx, cy64, rx, ry)`: the first is the flat base,
+    /// the rest the puffs on top.
+    blobs: &'static [(i32, i32, i32, i32)],
+}
+
+/// Background columns before the cloud pattern repeats.
+const CLOUD_PERIOD: i32 = 320;
+
+/// The sky's clouds. Few and high, so the road keeps the eye; their bases
+/// are shaded pale blue (ICE), the classic flat-bottomed cumulus.
+const CLOUDS: &[Cloud] = &[
+    Cloud {
+        blobs: &[(30, 14, 22, 5), (22, 11, 9, 6), (36, 10, 11, 8)],
+    },
+    Cloud {
+        blobs: &[(118, 24, 16, 4), (112, 21, 7, 5), (124, 20, 8, 6)],
+    },
+    Cloud {
+        blobs: &[
+            (196, 9, 26, 5),
+            (186, 6, 10, 7),
+            (202, 5, 12, 9),
+            (214, 8, 8, 5),
+        ],
+    },
+    Cloud {
+        blobs: &[(272, 30, 12, 3), (270, 28, 6, 4)],
+    },
+];
+
+/// The blobs that reach sky row `y` of a sky `sky_h` rows tall, with their
+/// centres in rows: `(cx, cy, rx, ry)`. Most rows have none, so a frame
+/// tests each sky pixel against a handful of blobs at most.
+fn cloud_row(y: i32, sky_h: i32) -> Vec<(i32, i32, i32, i32)> {
+    CLOUDS
+        .iter()
+        .flat_map(|c| c.blobs.iter())
+        .map(|&(cx, cy64, rx, ry)| (cx, cy64 * sky_h / 64, rx, ry))
+        .filter(|&(_, cy, _, ry)| (y - cy).abs() <= ry)
+        .collect()
+}
+
+/// The cloud colour at background column `bx` in sky row `y`, given that
+/// row's blobs: WHITE, or ICE in a blob's lower third.
+fn cloud_at(bx: i32, y: i32, blobs: &[(i32, i32, i32, i32)]) -> Option<u8> {
+    let x = bx.rem_euclid(CLOUD_PERIOD);
+    let mut hit = None;
+    for &(cx, cy, rx, ry) in blobs {
+        // Wrap so a cloud straddling the period's edge stays whole.
+        let dx = (x - cx + CLOUD_PERIOD / 2).rem_euclid(CLOUD_PERIOD) - CLOUD_PERIOD / 2;
+        let dy = y - cy;
+        if dx * dx * ry * ry + dy * dy * rx * rx <= rx * rx * ry * ry {
+            let shade = dy * 3 > ry;
+            // White wins: a puff's body covers the base's shadow.
+            hit = match (hit, shade) {
+                (Some(WHITE), _) | (_, false) => Some(WHITE),
+                _ => Some(ICE),
+            };
+        }
+    }
+    hit
+}
+
+/// Sky, clouds, the far and near hills, then the road row by row. Each
+/// layer scrolls with its own share of `bg_shift` (parallax): clouds a
+/// third, the far range all of it, the near hills twice it.
 fn road_rows(c: &mut Canvas, v: &RoadView, track: &Track, bg_shift: i32, gates: &[u32]) {
     let w = v.w;
     for y in 0..v.h {
@@ -227,15 +307,29 @@ fn road_rows(c: &mut Canvas, v: &RoadView, track: &Track, bg_shift: i32, gates: 
             None => {
                 let frac = ((y * 16) / v.horizon.max(1)).clamp(0, 16) as u8;
                 c.dither_span(0, w, y, SKY_HI, SKY_LO, frac);
+                let blobs = cloud_row(y, v.horizon);
+                if !blobs.is_empty() {
+                    for x in 0..w {
+                        if let Some(k) = cloud_at(x + bg_shift.div_euclid(3), y, &blobs) {
+                            c.put(x, y, k);
+                        }
+                    }
+                }
             }
         }
     }
-    // Hills on the horizon, under any road that rises above it.
-    for x in 0..w {
-        let top = v.horizon - hill_height(x + bg_shift);
-        for y in top.max(0)..v.horizon.min(v.h) {
-            if v.rows[y as usize].is_none() {
-                c.put(x, y, HILLS);
+    // Hills on the horizon, under any road that rises above it: the far
+    // range, then the near green hills in front of it.
+    for (height, shift, colour) in [
+        (hill_height as fn(i32) -> i32, bg_shift, HILLS),
+        (near_hill_height as fn(i32) -> i32, bg_shift * 2, GRASS_DK),
+    ] {
+        for x in 0..w {
+            let top = v.horizon - height(x + shift);
+            for y in top.max(0)..v.horizon.min(v.h) {
+                if v.rows[y as usize].is_none() {
+                    c.put(x, y, colour);
+                }
             }
         }
     }
@@ -657,6 +751,43 @@ pub(crate) mod tests {
         b.object(36, -3.0, ObjectKind::Rock);
         b.traffic(TrafficCar::new(60.0, 10.0, 4.0));
         b.build()
+    }
+
+    #[test]
+    fn clouds_stay_high_wrap_seamlessly_and_have_shaded_bases() {
+        let sky = 200;
+        let mut white = 0;
+        let mut shade = 0;
+        for x in 0..CLOUD_PERIOD {
+            for y in 0..sky {
+                let blobs = cloud_row(y, sky);
+                match cloud_at(x, y, &blobs) {
+                    Some(WHITE) => white += 1,
+                    Some(ICE) => shade += 1,
+                    Some(k) => panic!("cloud colour {k}"),
+                    None => {}
+                }
+                if y > sky / 2 {
+                    assert!(blobs.is_empty(), "clouds keep to the upper sky");
+                }
+                assert_eq!(
+                    cloud_at(x, y, &blobs),
+                    cloud_at(x + CLOUD_PERIOD, y, &blobs)
+                );
+            }
+        }
+        assert!(
+            white > 0 && shade > 0 && white > shade,
+            "{white} white, {shade} shaded"
+        );
+    }
+
+    #[test]
+    fn the_near_hills_sit_lower_than_the_far_range() {
+        let far = (0..1000).map(hill_height).max().unwrap();
+        let near = (0..1000).map(near_hill_height).max().unwrap();
+        assert!(near < far, "near {near} vs far {far}");
+        assert!((0..1000).all(|x| near_hill_height(x) >= 1));
     }
 
     #[test]
