@@ -25,6 +25,12 @@ config/features=PackedStringArray("4.7", "GL Compatibility")
 ; screen, quit from the title) instead of closing the app from anywhere.
 config/quit_on_go_back=false
 
+[autoload]
+
+; Power source, battery saver, thermal status and game mode, and the frame
+; cap built on them (addons/device_power, see its UPSTREAM.md).
+DevicePower="*res://addons/device_power/device_power.gd"
+
 [display]
 
 window/size/viewport_width=180
@@ -58,3 +64,8 @@ anti_aliasing/quality/msaa_2d=0
 anti_aliasing/quality/screen_space_aa=0
 ; Letterbox bars.
 environment/defaults/default_clear_color=Color(0, 0, 0, 1)
+
+[editor_plugins]
+
+; Enabled so Gradle Android exports bundle the device_power Kotlin plugin.
+enabled=PackedStringArray("res://addons/device_power/plugin.cfg")

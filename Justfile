@@ -69,8 +69,23 @@ android-lib profile="debug" features="":
         --config 'target.aarch64-linux-android.linker="{{ android_bin }}/aarch64-linux-android24-clang"'
     "{{ android_bin }}/llvm-strip" --strip-debug target/aarch64-linux-android/{{ profile }}/libracer_godot.so
 
+# Unpack Godot's official Android build template into android/build, which
+# Gradle exports need (and which bundles the device_power Kotlin plugin).
+# Re-run after a Godot upgrade; android/build is not tracked.
+android-template:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    src="${GODOT_TEMPLATES:-$HOME/.local/share/godot/export_templates/4.7.2.stable}/android_source.zip"
+    [ -f "$src" ] || { echo "missing $src: install Godot's 4.7.2 export templates" >&2; exit 1; }
+    rm -rf android/build && mkdir -p android/build
+    unzip -q "$src" -d android/build
+    touch android/build/.gdignore
+    echo "4.7.2.stable" > android/.build_version
+    chmod +x android/build/gradlew
+
 # Export the APK to build/racer.apk: a debug export, or with
-# profile=release a release export signed with the same debug key.
+# profile=release a release export signed with the same debug key. A Gradle
+# build: run `just android-template` once first.
 android-apk profile="debug" features="": build (android-lib profile features)
     #!/usr/bin/env bash
     set -euo pipefail
@@ -83,6 +98,7 @@ android-apk profile="debug" features="": build (android-lib profile features)
     export GODOT_ANDROID_KEYSTORE_RELEASE_USER="${GODOT_ANDROID_KEYSTORE_RELEASE_USER:-androiddebugkey}"
     export GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD="${GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD:-android}"
     bash tools/godot_headless.sh --frame-delay 800 --import
+    [ -f android/.build_version ] || { echo "run 'just android-template' first" >&2; exit 1; }
     bash tools/godot_headless.sh --export-{{ profile }} "Android" build/racer.apk
     ls -l build/racer.apk
 
