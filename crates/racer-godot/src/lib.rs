@@ -13,6 +13,7 @@ pub mod font;
 pub mod frame;
 pub mod layout;
 pub mod palette;
+pub mod project;
 pub mod raster;
 
 struct RacerExtension;
