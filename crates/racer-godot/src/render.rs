@@ -602,7 +602,7 @@ pub fn race_frame(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use racer_sim::track::{fixtures, Builder};
     use racer_sim::traffic::TrafficCar;

@@ -78,6 +78,7 @@ pub fn small_glyph(c: char) -> Option<[&'static str; SMALL_H]> {
         '\u{b7}' => ["000", "000", "010", "000", "000"],
         ',' => ["000", "000", "000", "010", "100"],
         '+' => ["000", "010", "111", "010", "000"],
+        '%' => ["101", "001", "010", "100", "101"],
         '-' => ["000", "000", "111", "000", "000"],
         ':' => ["000", "010", "000", "010", "000"],
         '/' => ["001", "001", "010", "100", "100"],
@@ -191,7 +192,7 @@ mod tests {
 
     #[test]
     fn every_glyph_is_the_declared_size() {
-        for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .,+-:/'!?><()\u{b7}".chars() {
+        for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .,+-:/'!?><()%\u{b7}".chars() {
             let g = small_glyph(c).unwrap_or_else(|| panic!("no 3x5 glyph for {c:?}"));
             assert_eq!(g.len(), SMALL_H);
             for row in g {

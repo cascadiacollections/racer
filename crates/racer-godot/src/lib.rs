@@ -9,14 +9,19 @@
 
 use godot::prelude::*;
 
+pub mod app;
+pub mod builder;
 pub mod font;
 pub mod frame;
+pub mod input;
 pub mod layout;
 pub mod palette;
 pub mod project;
 pub mod raster;
 pub mod render;
+pub mod screens;
 pub mod sprites;
+pub mod touch;
 
 struct RacerExtension;
 
