@@ -10,6 +10,8 @@
 //! [`raster::Canvas`], which is uploaded as one texture.
 //!
 //! ```text
+//! entry      lib            the GDExtension entry point
+//!            engine_classes the engine classes the game needs, checked at startup
 //! adapter    game           the one Godot node (Racer): engine events in, effects out
 //! core       app            modes, the run, pause, DEMO (engine-free)
 //!            input, touch   bindings and quantisation; on-screen buttons
@@ -31,6 +33,7 @@ use godot::prelude::*;
 
 pub mod app;
 pub mod builder;
+pub mod engine_classes;
 pub mod font;
 pub mod frame;
 pub mod game;
@@ -49,4 +52,14 @@ pub mod touch;
 struct RacerExtension;
 
 #[gdextension]
-unsafe impl ExtensionLibrary for RacerExtension {}
+unsafe impl ExtensionLibrary for RacerExtension {
+    fn on_stage_init(stage: InitStage) {
+        // Android runs on a stripped engine (docs/godot-templates.md); a
+        // class it lacks fails here, by name, rather than mid-race. Scene is
+        // the first stage every class is registered by. Not in the editor,
+        // which has every class anyway.
+        if stage == InitStage::Scene && !godot::classes::Engine::singleton().is_editor_hint() {
+            engine_classes::check();
+        }
+    }
+}
