@@ -3,3 +3,6 @@
 .godot/
 .DS_Store
 /build
+# Godot's Android build template (just android-template).
+/android/build/
+/android/.build_version

@@ -200,3 +200,21 @@ append `(epoch, digest)` to `EPOCHS` (never edit an entry that has reached
 `main`), and add a line here.
 
 - **Epoch 1:** the first M1 sim. Epoch digest: `0x7038998bdfbbe7ab`.
+
+## Device power and 120 Hz (2026-10-18)
+
+- `addons/device_power` is vendored from the godot-device-power v0.1.0 release
+  zip (see its `UPSTREAM.md`); `godot/platform_services.gd` passes
+  `DevicePower.recommended_fps_cap()` to `Racer.set_platform_fps_cap`, and the
+  race runs at `tighter_cap(project, platform)`; menus still idle at 30.
+- The Android export is now a Gradle build so the addon's Kotlin plugin is
+  bundled: run `just android-template` once (unpacks Godot's
+  `android_source.zip` into the untracked `android/build`).
+- Its `Surface.setFrameRate` vote lifts Android's 60 fps default for games.
+  Pixel 10 (Android 16), release + profiling, DEMO: charger 120.0 fps
+  (8.33 ms, p95 8.33), panel 120 Hz; `dumpsys battery unplug` 60.0 fps with the
+  panel at 60 Hz; Severe heat 30 fps, back to 120 after the 30 s cool-down.
+  Frame work 2.6 ms mean, ~5 ms p95: inside the 8.3 ms budget at 120.
+- The Gradle APK is 76 MB: the official engine library is stored
+  uncompressed (71 MB). Salt Line's stripped engine template (about 23 MB) is
+  the fix, later.

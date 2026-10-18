@@ -53,6 +53,18 @@ pub fn frame_cap(on_menu: bool, project_cap: i32) -> i32 {
     }
 }
 
+/// The tighter of two frame caps where 0 means "no cap": the project's own
+/// and the platform's power policy (the `device_power` addon: power source,
+/// battery saver, thermal status and Android game mode).
+pub fn tighter_cap(a: i32, b: i32) -> i32 {
+    match (a > 0, b > 0) {
+        (true, true) => a.min(b),
+        (true, false) => a,
+        (false, true) => b,
+        (false, false) => 0,
+    }
+}
+
 /// Durations in milliseconds, summarised as mean and 95th percentile.
 #[derive(Debug, Default, Clone)]
 pub struct Stats {
@@ -132,6 +144,18 @@ mod tests {
         assert_eq!(frame_cap(true, 120), IDLE_FPS);
         assert_eq!(frame_cap(true, 20), 20);
         assert_eq!(frame_cap(false, 120), 120);
+    }
+
+    #[test]
+    fn the_tighter_cap_wins_and_zero_is_no_cap() {
+        assert_eq!(tighter_cap(0, 0), 0);
+        assert_eq!(tighter_cap(0, 60), 60);
+        assert_eq!(tighter_cap(144, 0), 144);
+        assert_eq!(tighter_cap(45, 60), 45);
+        assert_eq!(tighter_cap(-1, 60), 60);
+        // Menus still drop below a platform cap.
+        assert_eq!(frame_cap(true, tighter_cap(0, 60)), IDLE_FPS);
+        assert_eq!(frame_cap(false, tighter_cap(0, 60)), 60);
     }
 
     #[test]

@@ -28,7 +28,7 @@ use godot::prelude::*;
 
 use crate::app::{Effect, Game};
 use crate::builder::Worker;
-use crate::frame::{frame_cap, Redraw};
+use crate::frame::{frame_cap, tighter_cap, Redraw};
 use crate::input::{self, Event, Intents};
 use crate::raster::Canvas;
 use crate::screens;
@@ -82,6 +82,9 @@ pub struct Racer {
     image: Option<Gd<Image>>,
     texture: Option<Gd<ImageTexture>>,
     project_cap: i32,
+    /// The platform's cap from its power state (0 is none), set by
+    /// `godot/platform_services.gd` from the `DevicePower` autoload.
+    platform_cap: i32,
     cap: i32,
     #[cfg(feature = "profiling")]
     profile: crate::profiling::Profile,
@@ -101,6 +104,7 @@ impl INode2D for Racer {
             image: None,
             texture: None,
             project_cap: 0,
+            platform_cap: 0,
             cap: -1,
             #[cfg(feature = "profiling")]
             profile: crate::profiling::Profile::default(),
@@ -122,7 +126,10 @@ impl INode2D for Racer {
         self.gather();
         let fx = self.g.tick(delta, &self.intents);
         self.apply(fx);
-        let cap = frame_cap(self.g.on_menu(), self.project_cap);
+        let cap = frame_cap(
+            self.g.on_menu(),
+            tighter_cap(self.project_cap, self.platform_cap),
+        );
         if cap != self.cap {
             Engine::singleton().set_max_fps(cap);
             self.cap = cap;
@@ -217,6 +224,24 @@ impl INode2D for Racer {
             | CanvasItemNotification::APPLICATION_RESUMED => self.redraw.mark(),
             _ => {}
         }
+    }
+}
+
+#[godot_api]
+impl Racer {
+    /// The platform's frame cap from its power state (0 is none): see the
+    /// `device_power` addon. The tighter of it and the project's cap is used
+    /// while racing; menus still drop to `frame::IDLE_FPS`.
+    #[func]
+    fn set_platform_fps_cap(&mut self, cap: i32) {
+        if cap == self.platform_cap {
+            return;
+        }
+        self.platform_cap = cap;
+        godot_print!(
+            "racer: platform frame cap {cap}, race cap {}",
+            tighter_cap(self.project_cap, cap)
+        );
     }
 }
 
