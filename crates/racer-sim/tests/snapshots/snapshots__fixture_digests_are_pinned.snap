@@ -1,0 +1,7 @@
+---
+source: crates/racer-sim/tests/snapshots.rs
+expression: out
+---
+drag_strip         bdd4f9ad907d9598
+sweep_and_hairpin  7476ef54e5d22731
+blind_crest        e2e79be366f278ec

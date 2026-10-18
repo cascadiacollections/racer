@@ -23,6 +23,8 @@
 pub mod dmath; // platform-stable trig, so the sim never calls libm
 pub mod hash; // FNV-1a, for track digests and the run state hash
 pub mod rng; // SplitMix64, PCG32, named substreams
+pub mod track; // segments, checkpoints, sight lines, the builder
+pub mod viz; // ASCII strip of a track, for tuning and snapshots
 
 /// Fixed simulation timestep: 120 ticks a second. Never make this variable.
 pub const DT: f64 = 1.0 / 120.0;
