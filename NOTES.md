@@ -241,5 +241,6 @@ append `(epoch, digest)` to `EPOCHS` (never edit an entry that has reached
 `tools/android_digest.sh`, and fails unless its digest equals the host's.
 Pixel 10 (Tensor G5, Android 16): `0x4a5c1bcc8fc9fdfb` over 200 runs and
 432,547 logged inputs, 0 replay divergences: identical to Linux, macOS and
-Windows. CI cannot run an arm64 phone; an emulator (x86_64) job like Salt
-Line's `sim-android` is a possible follow-up.
+Windows. CI cannot run an arm64 phone; the `sim-android` job runs the same corpus
+on an x86_64 Android emulator (API 35, aosp_atd) and the `determinism` job
+requires its digest to match the OS matrix.
