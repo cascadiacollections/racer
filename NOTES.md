@@ -233,3 +233,13 @@ append `(epoch, digest)` to `EPOCHS` (never edit an entry that has reached
   pad's buttons (capped at `INSET_MAX` = 16 rows, the road gives up the rows)
   and the full-screen screens place things from `Layout::bottom()`. Desktop
   has no inset.
+
+## Determinism on the phone (2026-10-18)
+
+`just android-digest` (ported from Salt Line) cross-compiles the
+`determinism` bin for arm64, runs it on the attached phone through
+`tools/android_digest.sh`, and fails unless its digest equals the host's.
+Pixel 10 (Tensor G5, Android 16): `0x4a5c1bcc8fc9fdfb` over 200 runs and
+432,547 logged inputs, 0 replay divergences: identical to Linux, macOS and
+Windows. CI cannot run an arm64 phone; an emulator (x86_64) job like Salt
+Line's `sim-android` is a possible follow-up.

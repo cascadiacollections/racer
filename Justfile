@@ -117,6 +117,20 @@ android profile="debug" features="": (android-apk profile features)
     "{{ adb }}" shell input keyevent KEYCODE_WAKEUP
     "{{ adb }}" shell monkey -p {{ package }} -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1
 
+# Play the determinism corpus on the attached phone (arm64) and fail unless
+# its digest equals this machine's: the sim must agree bit for bit across
+# CPUs, not just across the CI OS matrix (DESIGN §6).
+android-digest:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    rustup target add aarch64-linux-android
+    {{ cargo }} build --release -q -p racer-sim --bin determinism \
+        --target aarch64-linux-android \
+        --config 'target.aarch64-linux-android.linker="{{ android_bin }}/aarch64-linux-android24-clang"'
+    host=$({{ cargo }} run --release -q -p racer-sim --bin determinism | grep -oE 'digest: 0x[0-9a-f]+' | cut -d' ' -f2)
+    echo "host ($(uname -sm)) digest: $host"
+    ADB="{{ adb }}" bash tools/android_digest.sh target/aarch64-linux-android/release/determinism --expect "$host"
+
 # Follow the game's log on the device.
 android-log:
     "{{ adb }}" logcat --pid="$("{{ adb }}" shell pidof {{ package }})"
