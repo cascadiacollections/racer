@@ -28,6 +28,7 @@ pub mod race; // one race: the car, the checkpoint timer, the input log
 pub mod replay; // input log -> verified reconstruction, and its text form
 pub mod rng; // SplitMix64, PCG32, named substreams
 pub mod track; // segments, checkpoints, sight lines, the builder
+pub mod traffic; // slow cars on closed-form schedules
 pub mod viz; // ASCII strip of a track, for tuning and snapshots
 
 /// Fixed simulation timestep: 120 ticks a second. Never make this variable.

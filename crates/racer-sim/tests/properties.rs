@@ -63,7 +63,7 @@ proptest! {
     /// barriers.
     #[test]
     fn the_car_stays_finite_and_inside_the_barriers(
-        t in prop_oneof![track(), Just(fixtures::sweep_and_hairpin()), Just(fixtures::blind_crest())],
+        t in prop_oneof![track(), Just(fixtures::sweep_and_hairpin()), Just(fixtures::blind_crest()), Just(fixtures::hazards())],
         inputs in held_inputs(),
     ) {
         let p = CarParams::BASE;
@@ -104,7 +104,7 @@ proptest! {
     /// including the log itself and the text form's round trip.
     #[test]
     fn any_race_replays_to_the_same_state(
-        t in prop_oneof![track(), Just(fixtures::sweep_and_hairpin()), Just(fixtures::blind_crest())],
+        t in prop_oneof![track(), Just(fixtures::sweep_and_hairpin()), Just(fixtures::blind_crest()), Just(fixtures::hazards())],
         timed in any::<bool>(),
         inputs in held_inputs(),
     ) {

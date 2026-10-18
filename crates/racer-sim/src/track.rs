@@ -20,6 +20,7 @@
 //! [`track_hash`] leaves it out (it follows from what is hashed).
 
 use crate::hash::Hasher;
+use crate::traffic::TrafficCar;
 
 /// Length of one segment, metres. The road's resolution: every shape change,
 /// checkpoint and object sits on a segment boundary.
@@ -94,6 +95,51 @@ impl Surface {
     }
 }
 
+/// A roadside object. Hitting one spins the car (DESIGN §2.6).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Object {
+    /// The segment it stands on; it sits at the segment's middle.
+    pub seg: u32,
+    /// Offset from the centre line, centimetres, positive right.
+    pub x_cm: i16,
+    /// What it is, which sets its size.
+    pub kind: ObjectKind,
+}
+
+/// The kinds of roadside object.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u8)]
+pub enum ObjectKind {
+    /// A marker post: thin, easy to slip between.
+    Post = 0,
+    /// A boulder: wide enough to block most of a lane.
+    Rock = 1,
+}
+
+impl ObjectKind {
+    /// Radius, metres.
+    pub const fn radius(self) -> f64 {
+        match self {
+            ObjectKind::Post => 0.25,
+            ObjectKind::Rock => 1.0,
+        }
+    }
+}
+
+impl Object {
+    /// Distance along the track, metres: the middle of its segment.
+    #[inline]
+    pub fn z(&self) -> f64 {
+        (self.seg as f64 + 0.5) * SEG_LEN
+    }
+
+    /// Offset from the centre line, metres.
+    #[inline]
+    pub fn x(&self) -> f64 {
+        self.x_cm as f64 / 100.0
+    }
+}
+
 /// One 4 m slice of road.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Segment {
@@ -161,6 +207,10 @@ pub struct Track {
     /// added at the start of section `k`, which ends at `checkpoints[k]`.
     /// Set by calibration (DESIGN §2.4); empty until then.
     allot_ticks: Vec<u32>,
+    /// Roadside objects, sorted by segment.
+    objects: Vec<Object>,
+    /// Slow traffic, each car on a closed-form schedule (`traffic.rs`).
+    traffic: Vec<TrafficCar>,
 
     // Derived by `Track::new`; never hashed.
     /// Elevation at the start of every segment, metres, plus one past the end.
@@ -168,17 +218,26 @@ pub struct Track {
     /// How far ahead the road is visible from each segment, metres, capped at
     /// [`SIGHT_MAX`].
     sight: Vec<f64>,
+    /// `objects[object_start[i]..object_start[i + 1]]` stand on segment `i`.
+    object_start: Vec<u32>,
 }
 
 impl Track {
-    /// Build a track and derive its elevation, sight lines and crest flags.
+    /// Build a track and derive its elevation, sight lines, crest flags and
+    /// object index. Objects are sorted by segment (stably, so objects on one
+    /// segment keep their order).
     ///
     /// # Panics
     ///
-    /// If there are no segments, no checkpoints, or the checkpoints are not
-    /// strictly ascending inside the track. A track like that is a generator
-    /// bug, not something to drive.
-    pub fn new(mut segments: Vec<Segment>, checkpoints: Vec<u32>) -> Self {
+    /// If there are no segments, no checkpoints, the checkpoints are not
+    /// strictly ascending inside the track, or an object stands past the end.
+    /// A track like that is a generator bug, not something to drive.
+    pub fn new(
+        mut segments: Vec<Segment>,
+        checkpoints: Vec<u32>,
+        mut objects: Vec<Object>,
+        traffic: Vec<TrafficCar>,
+    ) -> Self {
         assert!(!segments.is_empty(), "a track needs segments");
         assert!(!checkpoints.is_empty(), "a track needs a finish line");
         assert!(
@@ -189,6 +248,19 @@ impl Track {
             (*checkpoints.last().unwrap() as usize) < segments.len(),
             "the finish line is past the end of the track"
         );
+        objects.sort_by_key(|o| o.seg);
+        assert!(
+            objects.iter().all(|o| (o.seg as usize) < segments.len()),
+            "an object stands past the end of the track"
+        );
+        let mut object_start = Vec::with_capacity(segments.len() + 1);
+        let mut k = 0;
+        for i in 0..=segments.len() {
+            while k < objects.len() && (objects[k].seg as usize) < i {
+                k += 1;
+            }
+            object_start.push(k as u32);
+        }
         let elevation = elevation_profile(&segments);
         let sight = sight_lines(&elevation);
         mark_crests(&mut segments, &elevation, &sight);
@@ -196,8 +268,11 @@ impl Track {
             segments,
             checkpoints,
             allot_ticks: Vec::new(),
+            objects,
+            traffic,
             elevation,
             sight,
+            object_start,
         }
     }
 
@@ -275,6 +350,25 @@ impl Track {
     pub fn set_allotments(&mut self, allot_ticks: Vec<u32>) {
         assert_eq!(allot_ticks.len(), self.checkpoints.len());
         self.allot_ticks = allot_ticks;
+    }
+
+    /// Every roadside object, sorted by segment.
+    #[inline]
+    pub fn objects(&self) -> &[Object] {
+        &self.objects
+    }
+
+    /// The objects standing on segments `from..to` (clamped to the track).
+    pub fn objects_in(&self, from: usize, to: usize) -> &[Object] {
+        let n = self.segments.len();
+        let (a, b) = (from.min(n), to.min(n).max(from.min(n)));
+        &self.objects[self.object_start[a] as usize..self.object_start[b] as usize]
+    }
+
+    /// The traffic.
+    #[inline]
+    pub fn traffic(&self) -> &[TrafficCar] {
+        &self.traffic
     }
 
     /// Elevation at distance `z`, metres, interpolated within the segment.
@@ -385,6 +479,18 @@ pub fn hash_track(h: &mut Hasher, t: &Track) {
     for &a in &t.allot_ticks {
         h.write_u32(a);
     }
+    h.write_usize(t.objects.len());
+    for o in &t.objects {
+        h.write_u32(o.seg);
+        h.write_i32(o.x_cm as i32);
+        h.write_u8(o.kind as u8);
+    }
+    h.write_usize(t.traffic.len());
+    for c in &t.traffic {
+        h.write_u32(c.z0_dm);
+        h.write_u32(c.speed_dms as u32);
+        h.write_i32(c.lane_cm as i32);
+    }
 }
 
 // ------------------------------------------------------------------ builder
@@ -401,6 +507,8 @@ pub fn hash_track(h: &mut Hasher, t: &Track) {
 pub struct Builder {
     segments: Vec<Segment>,
     checkpoints: Vec<u32>,
+    objects: Vec<Object>,
+    traffic: Vec<TrafficCar>,
 }
 
 impl Builder {
@@ -499,9 +607,26 @@ impl Builder {
         self
     }
 
-    /// Finish: derive the track's elevation, sight lines and crests.
+    /// Stand an object on segment `seg`, `x` metres from the centre line.
+    pub fn object(&mut self, seg: usize, x: f64, kind: ObjectKind) -> &mut Self {
+        self.objects.push(Object {
+            seg: seg as u32,
+            x_cm: crate::dmath::round(x * 100.0) as i16,
+            kind,
+        });
+        self
+    }
+
+    /// Add a traffic car.
+    pub fn traffic(&mut self, car: TrafficCar) -> &mut Self {
+        self.traffic.push(car);
+        self
+    }
+
+    /// Finish: derive the track's elevation, sight lines, crests and object
+    /// index.
     pub fn build(self) -> Track {
-        Track::new(self.segments, self.checkpoints)
+        Track::new(self.segments, self.checkpoints, self.objects, self.traffic)
     }
 }
 
@@ -541,6 +666,22 @@ pub mod fixtures {
         b.straight(60).bend(24, 70, 4).straight(40).checkpoint();
         b.straight(20);
         b.hill(30, 36, 9.0);
+        b.build()
+    }
+
+    /// A straight with every hazard on it, one at a time: a row of posts
+    /// pinching the right lane, a boulder in the left lane, a gravel patch,
+    /// an ice patch and a slow car in the centre lane.
+    pub fn hazards() -> Track {
+        let mut b = Builder::new();
+        b.straight(300).checkpoint().straight(20);
+        for seg in (60..80).step_by(2) {
+            b.object(seg, 4.0, ObjectKind::Post);
+        }
+        b.object(100, -4.0, ObjectKind::Rock);
+        b.surface(130, 20, Surface::Gravel);
+        b.surface(170, 15, Surface::Ice);
+        b.traffic(TrafficCar::new(400.0, 20.0, 0.0));
         b.build()
     }
 }
@@ -619,7 +760,7 @@ mod tests {
     fn crest_flags_are_derived_not_trusted() {
         let mut segs = fixtures::drag_strip().segments().to_vec();
         segs[10].flags |= flags::CREST;
-        let t = Track::new(segs, vec![100]);
+        let t = Track::new(segs, vec![100], vec![], vec![]);
         assert!(!t.segments()[10].has(flags::CREST));
     }
 
@@ -632,13 +773,24 @@ mod tests {
         assert_ne!(track_hash(&a), track_hash(&b));
         let mut segs = a.segments().to_vec();
         segs[3].surface = Surface::Gravel;
-        let c = Track::new(segs, a.checkpoints().to_vec());
+        let c = Track::new(segs, a.checkpoints().to_vec(), vec![], vec![]);
         assert_ne!(track_hash(&a), track_hash(&c));
+    }
+
+    #[test]
+    fn objects_are_indexed_by_segment() {
+        let t = fixtures::hazards();
+        assert_eq!(t.objects_in(0, 60).len(), 0);
+        assert_eq!(t.objects_in(60, 61).len(), 1);
+        assert_eq!(t.objects_in(60, 80).len(), 10);
+        assert_eq!(t.objects_in(100, 101)[0].kind, ObjectKind::Rock);
+        assert_eq!(t.objects_in(250, 9999).len(), 0);
+        assert_eq!(t.objects_in(9999, 10).len(), 0);
     }
 
     #[test]
     #[should_panic(expected = "checkpoints must ascend")]
     fn checkpoints_must_ascend() {
-        Track::new(vec![Segment::default(); 10], vec![5, 5]);
+        Track::new(vec![Segment::default(); 10], vec![5, 5], vec![], vec![]);
     }
 }

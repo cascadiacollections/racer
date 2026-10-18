@@ -25,6 +25,7 @@ fn fixture_digests_are_pinned() {
         ("drag_strip", fixtures::drag_strip()),
         ("sweep_and_hairpin", fixtures::sweep_and_hairpin()),
         ("blind_crest", fixtures::blind_crest()),
+        ("hazards", fixtures::hazards()),
     ]
     .iter()
     .map(|(name, t)| format!("{name:<18} {:016x}\n", track_hash(t)))

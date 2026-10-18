@@ -26,7 +26,7 @@ const BAR_FULL_MILLI: f64 = 120.0;
 /// `elev` is metres at the row's start and `sight` how far ahead the road is
 /// visible from there. `surf` is one letter per segment (`.` asphalt, `g`
 /// gravel, `i` ice, `p` puddle). Flags: `D` drift required, `H` drift hint,
-/// `C` blind crest. Checkpoint rows end with `<- CP n`, the finish with
+/// `C` blind crest, `o` roadside objects. Checkpoint rows end with `<- CP n`, the finish with
 /// `<- FINISH`.
 pub fn ascii_strip(t: &Track) -> String {
     let mut out = format!(
@@ -67,6 +67,9 @@ pub fn ascii_strip(t: &Track) -> String {
             if row.iter().any(|s| s.has(flag)) {
                 fl.push(c);
             }
+        }
+        if !t.objects_in(start, start + ROW_SEGS).is_empty() {
+            fl.push('o');
         }
         let z = start as f64 * SEG_LEN;
         let mut line = format!(

@@ -11,6 +11,11 @@
 //! Time is an integer tick count, never an accumulated float, so "the timer
 //! ran out on tick 5,000" means the same thing on every platform.
 //!
+//! Collisions are the race's job, not the car's: the car knows the road
+//! under it, the race knows what else is on it. Hitting a roadside object or
+//! a traffic car spins the car (DESIGN §2.6); a spinning car is not hit
+//! again, so one mistake costs one spin.
+//!
 //! The race records its own input log as it is driven: one entry per change
 //! of input, with the ticks since the previous change. Any driver — a player,
 //! a bot — produces a replayable log without doing anything (`replay.rs`).
@@ -22,6 +27,7 @@ use crate::hash::Hasher;
 use crate::input::Input;
 use crate::replay::Event;
 use crate::track::Track;
+use crate::traffic::{CAR_HALF_WIDTH, CAR_LEN};
 
 /// Hard cap on a race's length, ticks: four minutes. Only an untimed race
 /// (a track not yet calibrated, DESIGN §2.4) can get near it; a timed race
@@ -54,6 +60,8 @@ pub struct Race {
     margins: Vec<u32>,
     /// The race tick on which each gate was crossed.
     splits: Vec<u32>,
+    /// Collisions so far.
+    hits: u32,
     log: Vec<Event>,
     input: Input,
     last_change: u32,
@@ -80,6 +88,7 @@ impl Race {
             phase: Phase::Racing,
             margins: Vec::new(),
             splits: Vec::new(),
+            hits: 0,
             log: Vec::new(),
             input: Input::NEUTRAL,
             last_change: 0,
@@ -103,10 +112,41 @@ impl Race {
         // Every tick costs a tick of timer; a gate reached on the tick the
         // timer empties still counts, with a margin of zero.
         self.tick += 1;
+        self.collide();
         self.timer -= 1;
         self.cross_gates();
         if self.phase == Phase::Racing && (self.timer == 0 || self.tick >= MAX_RACE_TICKS) {
             self.phase = Phase::TimeUp;
+        }
+    }
+
+    /// Spin the car if it overlaps an object or a traffic car. A rear-ended
+    /// car also takes the player down to below its own speed, so the player
+    /// comes out of the spin behind it rather than in it.
+    fn collide(&mut self) {
+        if self.car.spinning() {
+            return;
+        }
+        let (z, x) = (self.car.z, self.car.x);
+        let seg = self.track.index_at(z);
+        let near = self.track.objects_in(seg.saturating_sub(1), seg + 2);
+        let object = near.iter().any(|o| {
+            let r = o.kind.radius();
+            crate::dmath::abs(z - o.z()) < CAR_LEN / 2.0 + r
+                && crate::dmath::abs(x - o.x()) < CAR_HALF_WIDTH + r
+        });
+        let rear_ended = self
+            .track
+            .traffic()
+            .iter()
+            .find(|c| c.hits(self.tick, z, x))
+            .map(|c| c.speed());
+        if object || rear_ended.is_some() {
+            self.hits += 1;
+            self.car.spin();
+        }
+        if let Some(v) = rear_ended {
+            self.car.v = self.car.v.min(0.9 * v);
         }
     }
 
@@ -186,6 +226,12 @@ impl Race {
         &self.log
     }
 
+    /// Collisions so far.
+    #[inline]
+    pub fn hits(&self) -> u32 {
+        self.hits
+    }
+
     /// The input in effect.
     #[inline]
     pub fn input(&self) -> Input {
@@ -219,6 +265,7 @@ impl Race {
         h.write_u32(self.timer);
         h.write_usize(self.next_gate);
         h.write_u8(self.phase as u8);
+        h.write_u32(self.hits);
         for (&m, &s) in self.margins.iter().zip(&self.splits) {
             h.write_u32(m);
             h.write_u32(s);
@@ -290,6 +337,55 @@ mod tests {
         let before = race.tick();
         race.step(Input::NEUTRAL);
         assert_eq!(race.tick(), before);
+    }
+
+    /// Drive the hazards fixture holding a lane, `x` metres off centre.
+    fn hold_lane(x: f64, ticks: u32) -> Race {
+        let mut race = Race::new(Arc::new(fixtures::hazards()), CarParams::BASE);
+        for _ in 0..ticks {
+            let dx = x - race.car().x;
+            let steer = if dx > 0.3 {
+                1
+            } else if dx < -0.3 {
+                -1
+            } else {
+                0
+            };
+            race.step(Input::new(steer, false, false));
+        }
+        race
+    }
+
+    #[test]
+    fn the_post_row_spins_a_car_in_the_right_lane() {
+        let race = hold_lane(4.0, 8 * TICKS_PER_SEC);
+        assert!(race.hits() >= 1);
+        // Down the centre, posts, rock and traffic are all clear until the
+        // slow car ahead is caught.
+        let clear = hold_lane(0.0, 5 * TICKS_PER_SEC);
+        assert_eq!(clear.hits(), 0);
+    }
+
+    #[test]
+    fn rear_ending_traffic_spins_and_slows_the_car() {
+        let mut race = hold_lane(0.0, 0);
+        let car = race.track().traffic()[0];
+        let mut hit_at = None;
+        for _ in 0..(40 * TICKS_PER_SEC) {
+            race.step(Input::NEUTRAL);
+            if race.hits() > 0 {
+                hit_at = Some(race.tick());
+                break;
+            }
+        }
+        let tick = hit_at.expect("caught the slow car");
+        assert!(race.car().spinning());
+        assert!(race.car().v <= 0.9 * car.speed());
+        // Spinning is a grace period: no second hit while it lasts.
+        for _ in 0..40 {
+            race.step(Input::NEUTRAL);
+        }
+        assert_eq!(race.hits(), 1, "hit once at tick {tick}");
     }
 
     #[test]

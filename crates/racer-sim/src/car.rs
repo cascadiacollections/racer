@@ -615,6 +615,26 @@ mod tests {
     }
 
     #[test]
+    fn each_surface_settles_at_its_own_top_speed() {
+        for surface in Surface::ALL {
+            let mut b = Builder::new();
+            b.straight(1500).checkpoint().straight(1);
+            b.surface(0, 1500, surface);
+            let t = b.build();
+            let mut car = Car::new();
+            run(&mut car, &t, Input::NEUTRAL, 40 * 120);
+            // Equilibrium of ACC·(1 − v/vmax_eff) = drag.
+            let sp = SurfaceParams::of(surface);
+            let settle = P.vmax * sp.vmax * (1.0 - sp.drag / P.accel);
+            assert!(
+                (car.v - settle).abs() < 0.05,
+                "{surface:?}: {} vs {settle}",
+                car.v
+            );
+        }
+    }
+
+    #[test]
     fn grass_is_slower_than_road() {
         let t = fixtures::drag_strip();
         let (mut road, mut grass) = (Car::new(), Car::new());

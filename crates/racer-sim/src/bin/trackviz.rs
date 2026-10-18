@@ -15,6 +15,7 @@ fn fixture(name: &str) -> Option<Track> {
         "drag_strip" => fixtures::drag_strip(),
         "sweep_and_hairpin" => fixtures::sweep_and_hairpin(),
         "blind_crest" => fixtures::blind_crest(),
+        "hazards" => fixtures::hazards(),
         _ => return None,
     })
 }
