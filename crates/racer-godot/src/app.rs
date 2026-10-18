@@ -41,8 +41,8 @@ use racer_sim::track::{fixtures, Track};
 use racer_sim::DT;
 
 use crate::builder::{Build, Key};
-use crate::input::{bind, pressed, Controls, Event, Intents};
-use crate::layout::{buffer_size, Layout, H_MIN};
+use crate::input::{bind, pressed, Controls, Event, Intents, SteerRamp};
+use crate::layout::{buffer_size, inset_rows, Layout, H_MIN};
 use crate::render::{Decor, Held};
 use crate::touch::{Action, Button, TouchPad};
 
@@ -124,8 +124,12 @@ pub struct Game {
     builder: Box<dyn Build>,
     buttons: Vec<Button>,
     acc: f64,
+    /// Builds the player's held direction up to full lock, per sim tick.
+    ramp: SteerRamp,
     demo: Option<Demo>,
     window: (i32, i32),
+    /// The bottom inset the layout was made for, screen pixels.
+    inset_px: i32,
     fx: Vec<Effect>,
 }
 
@@ -153,8 +157,10 @@ impl Game {
             builder,
             buttons: Vec::new(),
             acc: 0.0,
+            ramp: SteerRamp::default(),
             demo: None,
             window: (0, 0),
+            inset_px: 0,
             fx: Vec::new(),
         }
     }
@@ -206,10 +212,11 @@ impl Game {
     pub fn tick(&mut self, delta: f64, i: &Intents) -> Vec<Effect> {
         let delta = delta.clamp(0.0, MAX_FRAME);
         self.clock += delta;
-        if i.window != self.window && i.window.0 > 0 {
+        if (i.window != self.window || i.bottom_inset != self.inset_px) && i.window.0 > 0 {
             self.window = i.window;
+            self.inset_px = i.bottom_inset;
             let (w, h) = buffer_size(i.window);
-            self.layout = Layout::new(h);
+            self.layout = Layout::with_inset(h, inset_rows(i.bottom_inset, i.window.1, h));
             self.fx.push(Effect::Buffer { w, h });
             self.fx.push(Effect::Redraw);
         }
@@ -388,7 +395,7 @@ impl Game {
             self.acc -= DT;
             let input = match self.demo.as_mut().and_then(|d| d.bot.as_mut()) {
                 Some(bot) => bot.input(run.race()),
-                None => player,
+                None => self.ramp.shape(player, controls.left != controls.right),
             };
             run.step(input);
             last = input;
