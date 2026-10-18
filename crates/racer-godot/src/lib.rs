@@ -9,6 +9,12 @@
 
 use godot::prelude::*;
 
+pub mod font;
+pub mod frame;
+pub mod layout;
+pub mod palette;
+pub mod raster;
+
 struct RacerExtension;
 
 #[gdextension]
