@@ -2,7 +2,9 @@
 //!
 //! Nothing else is persisted. A race is its track and its log, where each
 //! log entry is a change of input and the ticks since the previous change;
-//! a run (`run.rs`) adds its seed and a fork marker for each route choice.
+//! a run (`run.rs`) is its seed and the races' logs end to end, with a fork
+//! marker for each route choice. [`Replay`] rebuilds a run from exactly
+//! that.
 //!
 //! # Event sourcing
 //!
@@ -24,6 +26,7 @@ use crate::car::CarParams;
 use crate::hash::Hasher;
 use crate::input::{Input, STEER_LEVELS};
 use crate::race::{Phase, Race};
+use crate::run::{state_hash, RunPhase, RunState, Tracks};
 use crate::track::Track;
 
 /// One entry of an input log.
@@ -72,6 +75,56 @@ pub enum ReplayError {
         /// Index into the log.
         at: usize,
     },
+    /// A fork where none can be taken: mid-race, after a lost race or after
+    /// the last track, or a branch other than 0 or 1.
+    UnexpectedFork {
+        /// Index into the log.
+        at: usize,
+    },
+}
+
+/// Something a log of input changes can drive: a race, or a run's current
+/// race.
+pub trait Steppable {
+    /// Advance one tick with `input`.
+    fn step(&mut self, input: Input);
+    /// Whether a race is under way.
+    fn racing(&self) -> bool;
+}
+
+impl Steppable for Race {
+    fn step(&mut self, input: Input) {
+        Race::step(self, input);
+    }
+    fn racing(&self) -> bool {
+        self.phase() == Phase::Racing
+    }
+}
+
+/// Feed one race's input changes from the front of `events` to `s`, then
+/// run on with the last input until the race ends. Returns how many events
+/// it used: it stops at the first fork marker. `at` is the index of
+/// `events[0]` in the whole log, for errors.
+fn feed(s: &mut impl Steppable, events: &[Event], at: usize) -> Result<usize, ReplayError> {
+    let mut used = 0;
+    let mut input = Input::NEUTRAL;
+    for (i, e) in events.iter().enumerate() {
+        let Event::Input { delta, input: next } = *e else {
+            break;
+        };
+        for _ in 0..delta {
+            s.step(input);
+        }
+        if !s.racing() {
+            return Err(ReplayError::InputAfterEnd { at: at + i });
+        }
+        input = next;
+        used += 1;
+    }
+    while s.racing() {
+        s.step(input);
+    }
+    Ok(used)
 }
 
 /// Replay one race's input changes, `events`, on `track`, then let the race
@@ -92,25 +145,63 @@ pub fn replay_race(
     events: &[Event],
 ) -> Result<(Race, usize), ReplayError> {
     let mut race = Race::new(track, params);
-    let mut used = 0;
-    let mut input = Input::NEUTRAL;
-    for (i, e) in events.iter().enumerate() {
-        let Event::Input { delta, input: next } = *e else {
-            break;
-        };
-        for _ in 0..delta {
-            race.step(input);
-        }
-        if race.phase() != Phase::Racing {
-            return Err(ReplayError::InputAfterEnd { at: i });
-        }
-        input = next;
-        used += 1;
-    }
-    while race.phase() == Phase::Racing {
-        race.step(input);
-    }
+    let used = feed(&mut race, events, 0)?;
     Ok((race, used))
+}
+
+/// A complete, replayable run: its seed and its log.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Replay {
+    /// The run's seed.
+    pub run_seed: u64,
+    /// Every input change and fork, in order.
+    pub log: Vec<Event>,
+}
+
+impl Replay {
+    /// Snapshot a run's identity and log. Its reconstruction matches the
+    /// live run at race boundaries: once the current race has ended, or a
+    /// fork has just been taken.
+    pub fn of(run: &RunState) -> Self {
+        Replay {
+            run_seed: run.run_seed(),
+            log: run.log(),
+        }
+    }
+
+    /// Rebuild the run, race by race, getting tracks from `tracks`. Each
+    /// race is driven by its logged inputs and then runs on with the last
+    /// input to its end; each fork marker takes its branch.
+    ///
+    /// # Errors
+    ///
+    /// A [`ReplayError`] naming the first log entry that cannot be applied.
+    pub fn reconstruct(&self, tracks: &mut impl Tracks) -> Result<RunState, ReplayError> {
+        let mut run = RunState::new(self.run_seed, tracks);
+        let mut at = 0;
+        loop {
+            at += feed(&mut run, &self.log[at..], at)?;
+            match self.log.get(at) {
+                None => return Ok(run),
+                Some(&Event::Fork { branch }) => {
+                    if run.phase() != RunPhase::Forking || !run.fork(branch, tracks) {
+                        return Err(ReplayError::UnexpectedFork { at });
+                    }
+                    at += 1;
+                }
+                Some(Event::Input { .. }) => unreachable!("feed stops only at a fork or the end"),
+            }
+        }
+    }
+
+    /// Reconstruct and hash. This is the number CI compares across platforms.
+    ///
+    /// # Errors
+    ///
+    /// As [`Replay::reconstruct`].
+    pub fn final_hash(&self, tracks: &mut impl Tracks) -> Result<u64, ReplayError> {
+        self.reconstruct(tracks).map(|r| state_hash(&r))
+    }
 }
 
 // ------------------------------------------------------------- text form
@@ -291,6 +382,53 @@ mod tests {
         live.hash_into(&mut a);
         rebuilt.hash_into(&mut b);
         assert_eq!(a.finish(), b.finish());
+    }
+
+    #[test]
+    fn a_run_replays_from_its_seed_and_log() {
+        let mut tracks = crate::run::TrackCache::new();
+        let live = crate::run::autoplay(11, 3, &mut tracks);
+        assert!(matches!(live.phase(), RunPhase::Won | RunPhase::Lost));
+        let replay = Replay::of(&live);
+        assert!(
+            replay.log.iter().any(|e| matches!(e, Event::Fork { .. })) || live.results().len() == 1
+        );
+        let text = encode_log(&replay.log);
+        assert_eq!(decode_log(&text).as_ref(), Ok(&replay.log));
+        assert_eq!(replay.final_hash(&mut tracks), Ok(state_hash(&live)));
+    }
+
+    #[test]
+    fn a_fork_out_of_place_is_an_error() {
+        let mut tracks = crate::run::TrackCache::new();
+        // Braking the whole first race loses it: no fork follows a loss.
+        let brake = Event::Input {
+            delta: 0,
+            input: Input::new(0, true, false),
+        };
+        let after_loss = Replay {
+            run_seed: 11,
+            log: vec![brake, Event::Fork { branch: 0 }],
+        };
+        assert_eq!(
+            after_loss.reconstruct(&mut tracks).err(),
+            Some(ReplayError::UnexpectedFork { at: 1 })
+        );
+        // And there is never a third road.
+        let live = crate::run::autoplay(11, 3, &mut tracks);
+        if live.results().len() > 1 {
+            let mut log = Replay::of(&live).log;
+            let at = log
+                .iter()
+                .position(|e| matches!(e, Event::Fork { .. }))
+                .unwrap();
+            log[at] = Event::Fork { branch: 2 };
+            let bad = Replay { run_seed: 11, log };
+            assert_eq!(
+                bad.reconstruct(&mut tracks).err(),
+                Some(ReplayError::UnexpectedFork { at })
+            );
+        }
     }
 
     #[test]

@@ -9,6 +9,7 @@
 
 mod common;
 
+use racer_sim::run::Tracks;
 use racer_sim::solver::{build, Effort};
 use racer_sim::track::{fixtures, track_hash};
 use racer_sim::viz::ascii_strip;
@@ -47,6 +48,9 @@ fn generated_track_digests_are_pinned() {
     let mut out = String::new();
     for (seed, index, branch) in common::pinned_tracks() {
         let b = build(seed, index, branch, Effort::default());
+        // The cache must hand out the very track the solver built.
+        let cached = common::tracks().lock().unwrap().track(seed, index, branch);
+        assert_eq!(track_hash(&cached), track_hash(&b.track));
         out.push_str(&format!(
             "seed {seed} track {index}.{branch} {:<10} {:016x}\n",
             format!("{:?}", b.rung),

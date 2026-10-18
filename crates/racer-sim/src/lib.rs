@@ -16,6 +16,18 @@
 //!     no system time in any state-affecting path.
 //!   * No libm: trig and friends come from [`dmath`].
 //!
+//! Where to start reading:
+//!
+//! - [`car`]: the car's two axes of motion and the drift state machine
+//!   (DESIGN §3).
+//! - [`race`] and [`run`]: the checkpoint timer, and five tracks with forks
+//!   and upgrades between them (§1).
+//! - [`gen`] and [`solver`]: how a track is drafted, timed and proven
+//!   drivable before anyone sees it (§2).
+//! - [`bot`]: the perfect and human-like drivers the solver proves with.
+//! - [`replay`]: a run persisted as seed plus input log and rebuilt from it,
+//!   and [`SIM_EPOCH`]/[`EPOCHS`], which version that promise (§8).
+//!
 //! Units used throughout: metres, seconds and radians. A track is a list of
 //! 4 m segments whose shape is stored as small integers, so a track is the
 //! same on every platform by construction, not by luck of float rounding.
@@ -29,11 +41,35 @@ pub mod input; // one byte per tick: seven steer levels, brake, drift
 pub mod race; // one race: the car, the checkpoint timer, the input log
 pub mod replay; // input log -> verified reconstruction, and its text form
 pub mod rng; // SplitMix64, PCG32, named substreams
+pub mod run; // five tracks, forks, stacking upgrades
 pub mod solver; // calibrate, verify, and the reject/repair/fallback ladder
 pub mod track; // segments, checkpoints, sight lines, the builder
 pub mod traffic; // slow cars on closed-form schedules
 pub mod upgrade; // upgrades, loadouts, reachable loadouts per track
 pub mod viz; // ASCII strip of a track, for tuning and snapshots
+
+/// Version of the sim's outcomes. DESIGN §8.3.
+///
+/// Bumped on any change that alters a replay's outcome: generation,
+/// calibration, the bots that prove a track, the car, the race, the run, or
+/// what the log records. A log recorded under one epoch is only replayed by
+/// a sim of the same epoch; under any other it keeps its seed and nothing
+/// else.
+///
+/// Enforced rather than remembered: `tests/golden_runs.rs` hashes the pinned
+/// track digests together with the golden-run corpus and asserts the result
+/// is this epoch's entry in [`EPOCHS`]. Every bump gets a line in NOTES.md.
+pub const SIM_EPOCH: u32 = 1;
+
+/// Every epoch's digest, oldest first. Append-only: a sim change appends
+/// `(SIM_EPOCH, digest)` after bumping `SIM_EPOCH`; an existing entry is never
+/// edited, so a digest cannot be replaced without a bump. The tests check
+/// that the last entry is `SIM_EPOCH`, that no digest repeats, and that each
+/// is recorded in NOTES.md.
+pub const EPOCHS: &[(u32, u64)] = &[(1, 0x7038_998b_dfbb_e7ab)];
+
+/// The digest `SIM_EPOCH` vouches for: the last entry of [`EPOCHS`].
+pub const EPOCH_DIGEST: u64 = EPOCHS[EPOCHS.len() - 1].1;
 
 /// Fixed simulation timestep: 120 ticks a second. Never make this variable.
 pub const DT: f64 = 1.0 / 120.0;

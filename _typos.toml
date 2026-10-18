@@ -2,3 +2,7 @@
 # digests and track strips, not prose; the golden-run corpus is input logs.
 [files]
 extend-exclude = ["*.snap", "golden_runs.txt", "proptest-regressions/", "*.proptest-regressions"]
+
+[default.extend-words]
+# A right-hander or left-hander is a bend, not a misspelt handler.
+hander = "hander"
