@@ -217,7 +217,7 @@ append `(epoch, digest)` to `EPOCHS` (never edit an entry that has reached
   Frame work 2.6 ms mean, ~5 ms p95: inside the 8.3 ms budget at 120.
 - The Gradle APK is 76 MB: the official engine library is stored
   uncompressed (71 MB). Salt Line's stripped engine template (about 23 MB) is
-  the fix, later.
+  the fix (since done: docs/godot-templates.md).
 
 ## Steering ramp and the gesture inset (2026-10-18)
 
@@ -262,3 +262,25 @@ replay runs on past the quit). Files from another epoch are skipped.
 Gotcha: `JavaClassWrapper` rejects `null` for a `String` parameter (only
 object parameters take `null`), so `getExternalFilesDir(null)` matched no
 method and, in a release export, silently returned null.
+
+## CI Android dev builds (2026-10-18)
+
+`ci.yml`'s `android` job exports the release APK (arm64, Gradle, stripped
+engine) on every pull request and push to main, checks that its manifest
+registers `org.godotengine.plugin.v2.DevicePowerAndroid` and uploads it as
+the `dist-android` artifact. On main, `dev release` replaces the rolling
+`dev` prerelease ("Development build (<sha>)") with `Racer-android-arm64.apk`
+and `SHA256SUMS`, attested (`gh attestation verify`). versionName is
+`0.1.0-dev.<run number>`, versionCode the run number, so dev builds upgrade
+each other with `adb install -r` as long as the key stays the same.
+
+- **Engine**: main runs `prepare-android --require`, so a stale lock fails
+  the build; pull requests warn and fall back to the official engine.
+  `vars.STRIPPED_ENGINE=off` forces the official engine everywhere.
+- **Signing**: main uses the release key from the `ANDROID_RELEASE_KEYSTORE`
+  (or `_BASE64`), `ANDROID_RELEASE_KEYSTORE_PASSWORD` and
+  `ANDROID_RELEASE_KEY_ALIAS` secrets (repository or `release` environment)
+  when all are set; otherwise `ANDROID_DEBUG_KEYSTORE` (base64), otherwise a
+  throwaway key per run. The release notes say which. Changing key, or
+  going between a CI build and a local `just android` build (different debug
+  keys), needs an uninstall, which deletes saved runs.
