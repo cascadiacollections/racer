@@ -51,6 +51,9 @@ pointing/emulate_touch_from_mouse=true
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
 textures/canvas_textures/default_texture_filter=0
+; Android export refuses to run without an ETC2/ASTC path. Nothing here is
+; VRAM-compressed: the game's one texture is made at runtime.
+textures/vram_compression/import_etc2_astc=true
 anti_aliasing/quality/msaa_2d=0
 anti_aliasing/quality/screen_space_aa=0
 ; Letterbox bars.
