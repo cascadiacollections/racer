@@ -1,18 +1,60 @@
-; racer — Godot 4 project (M1 stub).
+; racer — Godot 4 project.
 ;
-; The project root is the repository root, as in Salt Line. M1 has no scene:
-; the extension registers one node, SimInfo, to prove it loads. The portrait
-; layout, palette and filtering rules arrive with the renderer in M2
-; (DESIGN §5).
+; The project root is the repository root, as in Salt Line. The whole game
+; draws into one software-rastered buffer (crates/racer-godot), so every
+; setting under [display] and [rendering] is there to show that buffer
+; whole and crisp (DESIGN §5):
+;
+;   viewport 180x320           the portrait buffer; the game resizes it to
+;                              180 x 320..400 with the window's aspect
+;   stretch canvas_items/keep  scale the buffer to the window and letterbox
+;                              (a landscape desktop window shows it in a
+;                              column; black bars from the clear colour)
+;   default_texture_filter=0   nearest, project-wide
+;
+; There is no input map: every binding is in Rust (input.rs).
 
 config_version=5
 
 [application]
 
 config/name="racer"
+run/main_scene="res://godot/main.tscn"
 config/features=PackedStringArray("4.7", "GL Compatibility")
+; Android's back gesture arrives as the game's back event (pause, leave a
+; screen, quit from the title) instead of closing the app from anywhere.
+config/quit_on_go_back=false
+
+[display]
+
+window/size/viewport_width=180
+window/size/viewport_height=320
+window/size/window_width_override=540
+window/size/window_height_override=960
+window/stretch/mode="canvas_items"
+window/stretch/aspect="keep"
+window/vsync/vsync_mode=1
+; Portrait first (DESIGN §5).
+window/handheld/orientation=1
+; Off, so the screen timeout applies on menus; the game holds the screen on
+; while racing (Effect::KeepScreenOn).
+window/energy_saving/keep_screen_on=false
+
+[input_devices]
+
+; Desktop mouse press, drag and release feed the same touch path as a phone.
+pointing/emulate_touch_from_mouse=true
 
 [rendering]
 
+; One textured quad a frame needs nothing more; phones use it too.
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
+textures/canvas_textures/default_texture_filter=0
+; Android export refuses to run without an ETC2/ASTC path. Nothing here is
+; VRAM-compressed: the game's one texture is made at runtime.
+textures/vram_compression/import_etc2_astc=true
+anti_aliasing/quality/msaa_2d=0
+anti_aliasing/quality/screen_space_aa=0
+; Letterbox bars.
+environment/defaults/default_clear_color=Color(0, 0, 0, 1)

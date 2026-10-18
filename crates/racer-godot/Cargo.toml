@@ -6,8 +6,14 @@ edition.workspace = true
 license.workspace = true
 
 [lib]
-# The GDExtension Godot loads.
-crate-type = ["cdylib"]
+# The GDExtension Godot loads, and an `rlib` so the engine-free modules
+# (the game, the projection, the raster) are unit-tested with `cargo test`.
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# Frame-time logging for device measurements (`profiling.rs`). Off in every
+# normal build.
+profiling = []
 
 [dependencies]
 # `api-4-7` pins the GDExtension API level to the engine this project
@@ -22,3 +28,6 @@ crate-type = ["cdylib"]
 # the main thread.
 godot = { version = "0.5", features = ["api-4-7", "lazy-function-tables"] }
 racer-sim = { path = "../racer-sim" }
+
+[dev-dependencies]
+insta = "1"

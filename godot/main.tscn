@@ -1,0 +1,8 @@
+[gd_scene format=3]
+
+; The whole game is the Racer node (crates/racer-godot/src/game.rs): it
+; draws one texture at the origin, which the viewport stretch scales.
+
+[node name="Main" type="Node2D"]
+
+[node name="Racer" type="Racer" parent="."]
