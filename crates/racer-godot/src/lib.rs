@@ -15,6 +15,8 @@ pub mod layout;
 pub mod palette;
 pub mod project;
 pub mod raster;
+pub mod render;
+pub mod sprites;
 
 struct RacerExtension;
 
