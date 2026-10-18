@@ -35,8 +35,12 @@ pub struct Camera {
     pub back: f64,
     /// Focal length: pixels per metre at one metre's depth.
     pub focal: f64,
-    /// The horizon's row, as a fraction of the view's height from the top.
-    pub horizon: f64,
+    /// Rows between the road under the car (on the flat) and the bottom of
+    /// the view: the car stands this far above the HUD. The horizon follows
+    /// from it, so a taller phone shows more sky, not a smaller car.
+    pub car_margin: i32,
+    /// The horizon never rises above this fraction of the view's height.
+    pub min_horizon: f64,
     /// Nothing nearer than this is projected, metres.
     pub near: f64,
     /// Segments drawn ahead of the camera.
@@ -44,14 +48,15 @@ pub struct Camera {
 }
 
 impl Camera {
-    /// The game's camera. The road at the car is about 150 px of the 180 px
-    /// buffer wide, and the car sits `height·focal/back` rows below the
-    /// horizon.
+    /// The game's camera. The road at the car is 144 px of the 180 px
+    /// buffer wide, and the car sits `height·focal/back` (96) rows below
+    /// the horizon, near the bottom of the view.
     pub const DEFAULT: Camera = Camera {
-        height: 6.0,
+        height: 8.0,
         back: 5.0,
         focal: 60.0,
-        horizon: 0.38,
+        car_margin: 14,
+        min_horizon: 0.25,
         near: 0.5,
         draw_segs: 120,
     };
@@ -153,7 +158,8 @@ impl RoadView {
     pub fn build(track: &Track, car_z: f64, car_x: f64, w: i32, h: i32, cam: Camera) -> RoadView {
         let cam_z = car_z - cam.back;
         let cam_y = track.elevation_at(cam_z.max(0.0)) + cam.height;
-        let horizon = (h as f64 * cam.horizon).round() as i32;
+        let horizon = (h - cam.car_margin - cam.car_drop().round() as i32)
+            .max((h as f64 * cam.min_horizon).round() as i32);
         let base = (cam_z / SEG_LEN).floor() as i64;
         let frac = cam_z / SEG_LEN - base as f64;
         let mut v = RoadView {

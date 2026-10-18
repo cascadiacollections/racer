@@ -2,9 +2,9 @@
 source: crates/racer-godot/src/render.rs
 expression: out
 ---
-sweep_mid_curve: 0x175d73f9b0932192
-hairpin_entry: 0xe80595ed9543424e
-crest_climbing: 0x8ed984eed6603dd0
-crest_over: 0xdaecd20acc149994
-hazards: 0xb5c0ba0c9687f036
-drift_corner_signed: 0x505087234e76d9fa
+sweep_mid_curve: 0x3c7723a6fb332390
+hairpin_entry: 0x6a0c5de2d57165b2
+crest_climbing: 0x6cf3df32f385d888
+crest_over: 0x8c83ba60421d3dd6
+hazards: 0xa1a609be392871a0
+drift_corner_signed: 0x9de2f2e34dc40e66
