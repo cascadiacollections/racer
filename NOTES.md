@@ -244,3 +244,21 @@ Pixel 10 (Tensor G5, Android 16): `0x4a5c1bcc8fc9fdfb` over 200 runs and
 Windows. CI cannot run an arm64 phone; the `sim-android` job runs the same corpus
 on an x86_64 Android emulator (API 35, aosp_atd) and the `determinism` job
 requires its digest to match the OS matrix.
+
+## Playtest capture (2026-10-18)
+
+The bot's numbers (reaction, noise, the 3–15% run-failure band) are guesses
+until compared with real drivers. Every player run that ends (won, out of
+time, or quit from pause; never DEMO) is saved as a run file
+(`replay::encode_run`: epoch, ending, seed, the input log) to the app's
+external files directory, `.../files/Documents/runs/` on Android, from
+`OS.get_system_dir(SYSTEM_DIR_DOCUMENTS, false)` (no permission, adb-readable),
+`user://runs` elsewhere. `just pull-runs` copies them off the phone and runs
+`playstats`: per track, the player's time, closest margin, spins and
+time-outs next to 16 holdout human-bot drives of the same track and loadout,
+then a per-index summary. A quit's last track is shown but not counted (its
+replay runs on past the quit). Files from another epoch are skipped.
+
+Gotcha: `JavaClassWrapper` rejects `null` for a `String` parameter (only
+object parameters take `null`), so `getExternalFilesDir(null)` matched no
+method and, in a release export, silently returned null.

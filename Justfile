@@ -131,6 +131,14 @@ android-digest:
     echo "host ($(uname -sm)) digest: $host"
     ADB="{{ adb }}" bash tools/android_digest.sh target/aarch64-linux-android/release/determinism --expect "$host"
 
+# Copy the runs the game kept on the attached phone to target/runs and
+# compare them with the human-like bot (playstats; NOTES.md "Playtest
+# capture"). The files stay on the phone.
+pull-runs:
+    mkdir -p target/runs && touch target/runs/.gdignore
+    "{{ adb }}" pull /sdcard/Android/data/{{ package }}/files/Documents/runs/. target/runs/
+    {{ cargo }} run --release -q -p racer-sim --bin playstats -- target/runs/run-*.txt
+
 # Follow the game's log on the device.
 android-log:
     "{{ adb }}" logcat --pid="$("{{ adb }}" shell pidof {{ package }})"

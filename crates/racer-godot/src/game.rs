@@ -21,7 +21,7 @@ use godot::classes::image::Format;
 use godot::classes::notify::CanvasItemNotification;
 use godot::classes::{
     DisplayServer, Engine, INode2D, Image, ImageTexture, Input, InputEvent, InputEventJoypadButton,
-    InputEventKey, InputEventScreenDrag, InputEventScreenTouch, Node2D, Os, Time,
+    InputEventKey, InputEventScreenDrag, InputEventScreenTouch, Node2D, Os, ProjectSettings, Time,
 };
 use godot::global::{JoyAxis, JoyButton, Key};
 use godot::prelude::*;
@@ -89,6 +89,10 @@ pub struct Racer {
     /// The platform's cap from its power state (0 is none), set by
     /// `godot/platform_services.gd` from the `DevicePower` autoload.
     platform_cap: i32,
+    /// Where finished runs are kept for playtest analysis: the app's
+    /// external files directory on Android (adb can read it), `user://runs`
+    /// elsewhere. Set by `godot/platform_services.gd`.
+    runs_dir: String,
     cap: i32,
     #[cfg(feature = "profiling")]
     profile: crate::profiling::Profile,
@@ -111,6 +115,7 @@ impl INode2D for Racer {
             inset_for: (0, 0),
             inset: 0,
             platform_cap: 0,
+            runs_dir: String::new(),
             cap: -1,
             #[cfg(feature = "profiling")]
             profile: crate::profiling::Profile::default(),
@@ -261,6 +266,12 @@ impl Racer {
     /// The platform's frame cap from its power state (0 is none): see the
     /// `device_power` addon. The tighter of it and the project's cap is used
     /// while racing; menus still drop to `frame::IDLE_FPS`.
+    /// The directory to keep finished runs in (an absolute path).
+    #[func]
+    fn set_runs_dir(&mut self, dir: GString) {
+        self.runs_dir = dir.to_string();
+    }
+
     #[func]
     fn set_platform_fps_cap(&mut self, cap: i32) {
         if cap == self.platform_cap {
@@ -275,6 +286,27 @@ impl Racer {
 }
 
 impl Racer {
+    /// Write a run file. A failure is logged, never fatal: playtest data is
+    /// a nicety, the game goes on.
+    fn save_run(&self, name: &str, text: &str) {
+        let dir = if self.runs_dir.is_empty() {
+            ProjectSettings::singleton()
+                .globalize_path("user://runs")
+                .to_string()
+        } else {
+            self.runs_dir.clone()
+        };
+        let path = std::path::Path::new(&dir).join(name);
+        match std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&path, text)) {
+            Ok(()) => {
+                godot_print!("racer: run saved to {}", path.display());
+            }
+            Err(e) => {
+                godot_warn!("racer: could not save {}: {e}", path.display());
+            }
+        }
+    }
+
     /// An event's position in the node's space: buffer pixels, after the
     /// window stretch and letterbox.
     fn local(&self, event: Gd<InputEvent>, fallback: Vector2) -> Vector2 {
@@ -347,6 +379,7 @@ impl Racer {
                 }
                 Effect::KeepScreenOn(on) => DisplayServer::singleton().screen_set_keep_on(on),
                 Effect::Quit => self.base().get_tree().quit(),
+                Effect::SaveRun { name, text } => self.save_run(&name, &text),
             }
         }
     }

@@ -13,6 +13,8 @@ extends Node2D
 func _ready() -> void:
 	DevicePower.changed.connect(_apply_power_cap)
 	_apply_power_cap()
+	if is_instance_valid(racer):
+		racer.set_runs_dir(_runs_dir())
 
 
 func _apply_power_cap() -> void:
@@ -35,3 +37,16 @@ func _apply_power_cap() -> void:
 			DevicePower.get_refresh_rates(),
 		]
 	)
+
+
+# Playtest capture: the game keeps every finished or abandoned run's replay
+# (racer_sim RunFile). On Android that is the app's own external files
+# directory (getExternalFilesDir("Documents"), created by the system, no
+# permission needed), which `adb pull` can read without root
+# (`just pull-runs`); user://runs elsewhere.
+func _runs_dir() -> String:
+	if OS.get_name() == "Android":
+		var docs := OS.get_system_dir(OS.SYSTEM_DIR_DOCUMENTS, false)
+		if not docs.is_empty():
+			return docs.path_join("runs")
+	return ProjectSettings.globalize_path("user://runs")

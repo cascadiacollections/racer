@@ -194,6 +194,38 @@ impl Replay {
         }
     }
 
+    /// [`Replay::reconstruct`], calling `observe` with the run after every
+    /// tick: how a tool counts spins, or anything else the outcome alone does
+    /// not show. Observing changes nothing; the result is the same run.
+    ///
+    /// # Errors
+    ///
+    /// As [`Replay::reconstruct`].
+    pub fn reconstruct_observed(
+        &self,
+        tracks: &mut impl Tracks,
+        observe: impl FnMut(&RunState),
+    ) -> Result<RunState, ReplayError> {
+        let mut o = Observed {
+            run: RunState::new(self.run_seed, tracks),
+            observe,
+        };
+        let mut at = 0;
+        loop {
+            at += feed(&mut o, &self.log[at..], at)?;
+            match self.log.get(at) {
+                None => return Ok(o.run),
+                Some(&Event::Fork { branch }) => {
+                    if o.run.phase() != RunPhase::Forking || !o.run.fork(branch, tracks) {
+                        return Err(ReplayError::UnexpectedFork { at });
+                    }
+                    at += 1;
+                }
+                Some(Event::Input { .. }) => unreachable!("feed stops only at a fork or the end"),
+            }
+        }
+    }
+
     /// Reconstruct and hash. This is the number CI compares across platforms.
     ///
     /// # Errors
@@ -202,6 +234,123 @@ impl Replay {
     pub fn final_hash(&self, tracks: &mut impl Tracks) -> Result<u64, ReplayError> {
         self.reconstruct(tracks).map(|r| state_hash(&r))
     }
+}
+
+/// A run being reconstructed, shown to an observer after every tick.
+struct Observed<F: FnMut(&RunState)> {
+    run: RunState,
+    observe: F,
+}
+
+impl<F: FnMut(&RunState)> Steppable for Observed<F> {
+    fn step(&mut self, input: Input) {
+        Steppable::step(&mut self.run, input);
+        (self.observe)(&self.run);
+    }
+    fn racing(&self) -> bool {
+        Steppable::racing(&self.run)
+    }
+}
+
+// ------------------------------------------------------------- run files
+
+/// Version of the saved-run file, its first line's second token.
+pub const RUN_FILE: u32 = 1;
+
+/// How a saved run ended.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Ending {
+    /// Cleared every track.
+    Won,
+    /// The checkpoint timer ran out.
+    Lost,
+    /// The player quit from the pause menu.
+    Quit,
+}
+
+impl Ending {
+    fn token(self) -> &'static str {
+        match self {
+            Ending::Won => "won",
+            Ending::Lost => "lost",
+            Ending::Quit => "quit",
+        }
+    }
+}
+
+/// A run as the game saves it for playtest analysis: the sim epoch it was
+/// played under (a replay is only exact under the same epoch), how it ended,
+/// and the replay itself.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RunFile {
+    /// `SIM_EPOCH` when it was played.
+    pub epoch: u32,
+    /// How it ended.
+    pub ending: Ending,
+    /// Seed and log.
+    pub replay: Replay,
+}
+
+/// Why a run file did not parse.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RunFileError {
+    /// The first line is not `racer-run 1`.
+    Header,
+    /// A required line is missing or malformed: its key.
+    Field(&'static str),
+    /// The log line did not parse.
+    Log(LogError),
+}
+
+/// The text form: four lines, `racer-run 1`, `epoch N`, `ending won|lost|quit`,
+/// `seed 0x…`, then `log` and [`encode_log`]'s tokens.
+pub fn encode_run(f: &RunFile) -> String {
+    format!(
+        "racer-run {RUN_FILE}\nepoch {}\nending {}\nseed {:#018x}\nlog {}\n",
+        f.epoch,
+        f.ending.token(),
+        f.replay.run_seed,
+        encode_log(&f.replay.log)
+    )
+}
+
+/// Parse [`encode_run`]'s text.
+///
+/// # Errors
+///
+/// A [`RunFileError`] for the first thing that is wrong.
+pub fn decode_run(text: &str) -> Result<RunFile, RunFileError> {
+    let mut lines = text.lines();
+    if lines.next() != Some(&*format!("racer-run {RUN_FILE}")) {
+        return Err(RunFileError::Header);
+    }
+    let mut field = |key: &'static str| -> Result<&str, RunFileError> {
+        lines
+            .next()
+            .and_then(|l| l.strip_prefix(key))
+            .and_then(|l| l.strip_prefix(' '))
+            .ok_or(RunFileError::Field(key))
+    };
+    let epoch = field("epoch")?
+        .parse()
+        .map_err(|_| RunFileError::Field("epoch"))?;
+    let ending = match field("ending")? {
+        "won" => Ending::Won,
+        "lost" => Ending::Lost,
+        "quit" => Ending::Quit,
+        _ => return Err(RunFileError::Field("ending")),
+    };
+    let seed = field("seed")?;
+    let run_seed = seed
+        .strip_prefix("0x")
+        .and_then(|h| u64::from_str_radix(h, 16).ok())
+        .ok_or(RunFileError::Field("seed"))?;
+    let log = decode_log(field("log")?).map_err(RunFileError::Log)?;
+    Ok(RunFile {
+        epoch,
+        ending,
+        replay: Replay { run_seed, log },
+    })
 }
 
 // ------------------------------------------------------------- text form
@@ -396,6 +545,52 @@ mod tests {
         let text = encode_log(&replay.log);
         assert_eq!(decode_log(&text).as_ref(), Ok(&replay.log));
         assert_eq!(replay.final_hash(&mut tracks), Ok(state_hash(&live)));
+    }
+
+    #[test]
+    fn observing_a_reconstruction_sees_every_tick_and_changes_nothing() {
+        let mut tracks = crate::run::TrackCache::new();
+        let live = crate::run::autoplay(11, 3, &mut tracks);
+        let replay = Replay::of(&live);
+        let mut ticks = 0u64;
+        let rebuilt = replay
+            .reconstruct_observed(&mut tracks, |_| ticks += 1)
+            .unwrap();
+        assert_eq!(state_hash(&rebuilt), state_hash(&live));
+        let played: u64 = live.results().iter().map(|r| r.ticks as u64).sum();
+        assert_eq!(ticks, played, "one call per tick of every race");
+    }
+
+    #[test]
+    fn a_run_file_round_trips_and_rejects_what_it_would_not_write() {
+        let mut tracks = crate::run::TrackCache::new();
+        let live = crate::run::autoplay(5, 1, &mut tracks);
+        let f = RunFile {
+            epoch: crate::SIM_EPOCH,
+            ending: Ending::Quit,
+            replay: Replay::of(&live),
+        };
+        let text = encode_run(&f);
+        assert!(text.starts_with("racer-run 1\nepoch "));
+        assert_eq!(decode_run(&text), Ok(f));
+        assert_eq!(decode_run(""), Err(RunFileError::Header));
+        assert_eq!(decode_run("racer-run 2\n"), Err(RunFileError::Header));
+        assert_eq!(
+            decode_run("racer-run 1\nepoch x\n"),
+            Err(RunFileError::Field("epoch"))
+        );
+        assert_eq!(
+            decode_run("racer-run 1\nepoch 1\nending maybe\n"),
+            Err(RunFileError::Field("ending"))
+        );
+        assert_eq!(
+            decode_run("racer-run 1\nepoch 1\nending won\nseed 12\n"),
+            Err(RunFileError::Field("seed"))
+        );
+        assert!(matches!(
+            decode_run("racer-run 1\nepoch 1\nending won\nseed 0x1\nlog v9\n"),
+            Err(RunFileError::Log(_))
+        ));
     }
 
     #[test]
