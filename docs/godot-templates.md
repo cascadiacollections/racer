@@ -13,6 +13,20 @@ manifest, the device_power plugin, the resources) is the official Gradle
 template of the same Godot version; only the arm64 `libgodot_android.so` in
 the template's release `godot-lib` AAR is replaced.
 
+| Release APK (arm64, 4.7.2, `release profiling`) | Official engine | Stripped engine |
+| --- | ---: | ---: |
+| APK | 76,048,830 B | 27,847,206 B (−63%) |
+| `libgodot_android.so` (stored uncompressed) | 71,114,944 B | 22,912,848 B (−68%) |
+| Installed on a Pixel 10 (`extractNativeLibs=false`) | 73 MB (`du`) | 27 MB (`du`) |
+
+Because the Gradle template stores native libraries uncompressed and does
+not extract them, the installed size tracks the APK. Measured October 18,
+2026 from a local build (`just godot-template`, SCons 4.11.1, NDK
+29.0.14206865, 5m47s on 16 threads). On the phone, a release profiling
+build on the stripped engine ran DEMO at 120 fps on USB and 60 fps with
+`dumpsys battery unplug`, with `Device power: backend=android_plugin`, the
+engine class check passing and no engine errors in logcat.
+
 This is Salt Line's pipeline (its `docs/godot-templates.md`), ported: the
 same build profile with one more module left out, the same build recipe,
 lock file, attested prerelease and startup class check.

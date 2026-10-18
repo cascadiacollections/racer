@@ -450,7 +450,7 @@ def main() -> None:
         p.add_argument("--require", action="store_true")
     lk = sub.add_parser("lock")
     lk_src = lk.add_mutually_exclusive_group()
-    lk_src.add_argument("--dir", type=Path, default=DEFAULT_OUT)
+    lk_src.add_argument("--dir", type=Path, nargs="?", const=DEFAULT_OUT, default=DEFAULT_OUT)
     lk_src.add_argument("--release", action="store_true")
     args = ap.parse_args()
 
