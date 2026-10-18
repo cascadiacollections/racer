@@ -78,8 +78,9 @@ fn title(g: &Game, c: &mut Canvas, art: &Art, l: &Layout) -> Vec<Button> {
     c.rect(h.x, h.y, h.w, h.h, INK);
     c.text_centred(cx, h.y + 3, "ARROWS STEER  DOWN BRAKE", ASPHALT_LT, 1);
     c.text_centred(cx, h.y + 12, "SPACE OR SHIFT DRIFTS", ASPHALT_LT, 1);
-    let p = l.pad;
-    c.rect(p.x, p.y, p.w, p.h, INK);
+    c.rect(l.pad.x, l.pad.y, l.pad.w, l.pad.h, INK);
+    // Buttons stay above the inset; the pad's background fills it.
+    let p = l.controls;
     let mut out = Vec::new();
     if g.mode == Mode::Building {
         let dots = ".".repeat((g.clock * 3.0) as usize % 4);
@@ -263,7 +264,7 @@ fn fork(g: &mut Game, c: &mut Canvas, l: &Layout) -> Vec<Button> {
     );
     c.text_centred(l.w / 2, 32, "CHOOSE YOUR ROAD", ASPHALT_LT, 1);
     let top = 44;
-    let card_h = (l.h - top - 30).min(250);
+    let card_h = (l.bottom() - top - 30).min(250);
     for b in 0..2u8 {
         let r = Rect::new(4 + b as i32 * 88, top, 84, card_h);
         let hot = g.fork_sel == b;
@@ -320,7 +321,7 @@ fn fork(g: &mut Game, c: &mut Canvas, l: &Layout) -> Vec<Button> {
     } else {
         "TAP A ROAD TO TAKE IT"
     };
-    c.text_centred(l.w / 2, l.h - 18, hint, ASPHALT_LT, 1);
+    c.text_centred(l.w / 2, l.bottom() - 18, hint, ASPHALT_LT, 1);
     out
 }
 
@@ -365,7 +366,7 @@ fn results(g: &Game, c: &mut Canvas, l: &Layout) -> Vec<Button> {
     }
     c.text(10, 118, &format!("TOTAL {}S", secs(total)), YELLOW, 1);
     c.text(10, 130, &run.loadout().describe().to_uppercase(), WHITE, 1);
-    let r = Rect::new(6, l.h - 52, l.w - 12, 46);
+    let r = Rect::new(6, l.bottom() - 52, l.w - 12, 46);
     labelled(c, &mut out, r, "CONTINUE", Action::Continue, true);
     out
 }

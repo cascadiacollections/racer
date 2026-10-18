@@ -218,3 +218,18 @@ append `(epoch, digest)` to `EPOCHS` (never edit an entry that has reached
 - The Gradle APK is 76 MB: the official engine library is stored
   uncompressed (71 MB). Salt Line's stripped engine template (about 23 MB) is
   the fix, later.
+
+## Steering ramp and the gesture inset (2026-10-18)
+
+- Keys and touch buttons no longer jump to full lock: `input::SteerRamp`,
+  stepped per sim tick, holds level 1 for 10 ticks and level 2 for 14 more,
+  reaching full lock at 200 ms; releasing or reversing restarts it. The stick
+  is not ramped. The shaped byte is what the sim and replays see. Values are a
+  first guess from the M2a note (full lock reached the verge in ~1.5 s at
+  150 km/h); tune by feel.
+- On phones the controls sit above Android's gesture area: the node passes
+  the larger of the display's bottom safe-area gap and 32 dp (Pixel 10: 84 px
+  = 14 buffer rows) as `Intents::bottom_inset`; `Layout::with_inset` lifts the
+  pad's buttons (capped at `INSET_MAX` = 16 rows, the road gives up the rows)
+  and the full-screen screens place things from `Layout::bottom()`. Desktop
+  has no inset.

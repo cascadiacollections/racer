@@ -21,7 +21,7 @@ use godot::classes::image::Format;
 use godot::classes::notify::CanvasItemNotification;
 use godot::classes::{
     DisplayServer, Engine, INode2D, Image, ImageTexture, Input, InputEvent, InputEventJoypadButton,
-    InputEventKey, InputEventScreenDrag, InputEventScreenTouch, Node2D, Time,
+    InputEventKey, InputEventScreenDrag, InputEventScreenTouch, Node2D, Os, Time,
 };
 use godot::global::{JoyAxis, JoyButton, Key};
 use godot::prelude::*;
@@ -82,6 +82,10 @@ pub struct Racer {
     image: Option<Gd<Image>>,
     texture: Option<Gd<ImageTexture>>,
     project_cap: i32,
+    /// The window size the bottom inset was read for, and the inset: read
+    /// again only when the window changes (it crosses into Java).
+    inset_for: (i32, i32),
+    inset: i32,
     /// The platform's cap from its power state (0 is none), set by
     /// `godot/platform_services.gd` from the `DevicePower` autoload.
     platform_cap: i32,
@@ -104,6 +108,8 @@ impl INode2D for Racer {
             image: None,
             texture: None,
             project_cap: 0,
+            inset_for: (0, 0),
+            inset: 0,
             platform_cap: 0,
             cap: -1,
             #[cfg(feature = "profiling")]
@@ -227,6 +233,29 @@ impl INode2D for Racer {
     }
 }
 
+/// Density-independent pixels Android's gesture navigation keeps at the
+/// bottom of the screen (Pixel 10: 84 px at 420 dpi).
+const GESTURE_DP: i32 = 32;
+
+/// Screen pixels at the bottom of a `win` window that touches must avoid.
+/// On a phone, the larger of the display's safe area (a cutout or bar at
+/// the bottom) and the gesture area, which the safe area does not cover; on
+/// a desktop, none.
+fn bottom_inset_px(win: (i32, i32)) -> i32 {
+    if !Os::singleton().has_feature("mobile") {
+        return 0;
+    }
+    let ds = DisplayServer::singleton();
+    let safe = ds.get_display_safe_area();
+    let safe_gap = if safe.size.y > 0 {
+        (win.1 - safe.position.y - safe.size.y).clamp(0, win.1 / 4)
+    } else {
+        0
+    };
+    let gesture = GESTURE_DP * ds.screen_get_dpi().max(160) / 160;
+    safe_gap.max(gesture)
+}
+
 #[godot_api]
 impl Racer {
     /// The platform's frame cap from its power state (0 is none): see the
@@ -292,6 +321,11 @@ impl Racer {
         i.stick_x = stick;
         let size = DisplayServer::singleton().window_get_size();
         i.window = (size.x, size.y);
+        if i.window != self.inset_for {
+            self.inset_for = i.window;
+            self.inset = bottom_inset_px(i.window);
+        }
+        i.bottom_inset = self.inset;
         let t = Time::singleton();
         i.entropy = (t.get_unix_time_from_system() * 1e6) as u64 ^ t.get_ticks_usec();
         if !i.events.is_empty() {

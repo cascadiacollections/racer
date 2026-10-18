@@ -6,9 +6,9 @@
 //! held into [`Intents`] once a frame; nothing here names a Godot type.
 //!
 //! Touch and keys are equally first-class and end in the same byte:
-//! a key or a touch button is full lock, a stick is proportional through
-//! [`Input::from_axis`], so a replay cannot tell the devices apart
-//! (DESIGN §3.1).
+//! a key or a touch button builds up to full lock through [`SteerRamp`], a
+//! stick is proportional through [`Input::from_axis`], so a replay cannot
+//! tell the devices apart (DESIGN §3.1).
 
 use racer_sim::input::Input;
 
@@ -80,6 +80,9 @@ pub struct Intents {
     pub stick_x: f32,
     /// The window, screen pixels.
     pub window: (i32, i32),
+    /// Screen pixels at the bottom of the window that touches must avoid:
+    /// the system's gesture area on a phone, 0 on a desktop.
+    pub bottom_inset: i32,
     /// Entropy for a new run's seed (the node reads the clock).
     pub entropy: u64,
 }
@@ -183,6 +186,54 @@ impl Controls {
     }
 }
 
+/// Sim ticks a held key or button spends at each partial lock before the
+/// next: level 1 for 10 ticks (83 ms), level 2 for 14 more, full lock from
+/// 24 ticks (200 ms). A tap nudges; a hold still reaches full lock in time
+/// for any corner. Without it, full lock on the first tick put the car on
+/// the verge after about 1.5 s at 150 km/h (NOTES.md, M2a device notes).
+pub const RAMP_TICKS: [u32; 2] = [10, 14];
+
+/// Turns a digital direction (keys, d-pad, touch buttons) into steering
+/// that builds over [`RAMP_TICKS`]. Stepped once per sim tick, so the ramp
+/// is the same at 30, 60 or 120 frames a second, and the shaped byte is
+/// what the sim and the replay log see.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SteerRamp {
+    /// The direction being held: -1, 0 or 1.
+    dir: i8,
+    /// Ticks it has been held.
+    ticks: u32,
+}
+
+impl SteerRamp {
+    /// One sim tick: `input` as quantised, `digital` when a key or button
+    /// (not the stick) set its direction. Releasing or reversing restarts
+    /// the ramp; a stick passes through untouched.
+    pub fn shape(&mut self, input: Input, digital: bool) -> Input {
+        let dir = if digital {
+            input.steer_level().signum()
+        } else {
+            0
+        };
+        if dir != self.dir {
+            self.dir = dir;
+            self.ticks = 0;
+        }
+        if dir == 0 {
+            return input;
+        }
+        let level = if self.ticks < RAMP_TICKS[0] {
+            1
+        } else if self.ticks < RAMP_TICKS[0] + RAMP_TICKS[1] {
+            2
+        } else {
+            racer_sim::input::STEER_LEVELS
+        };
+        self.ticks = self.ticks.saturating_add(1);
+        Input::new(dir * level, input.brake(), input.drift())
+    }
+}
+
 /// Whether `e` is a press of one of `keys` or `pads`.
 pub fn pressed(e: &Event, keys: &[Key], pads: &[Pad]) -> bool {
     match e {
@@ -203,6 +254,44 @@ mod tests {
             ..Intents::default()
         };
         Controls::held(&i).quantise()
+    }
+
+    #[test]
+    fn a_held_direction_ramps_to_full_lock_in_200_ms() {
+        let mut r = SteerRamp::default();
+        let right = Input::from_keys(false, true, false, true);
+        let levels: Vec<i8> = (0..30)
+            .map(|_| r.shape(right, true).steer_level())
+            .collect();
+        assert!(levels[..10].iter().all(|&l| l == 1));
+        assert!(levels[10..24].iter().all(|&l| l == 2));
+        assert!(levels[24..].iter().all(|&l| l == 3));
+        // The buttons pass through.
+        assert!(r.shape(right, true).drift());
+    }
+
+    #[test]
+    fn releasing_or_reversing_restarts_the_ramp() {
+        let mut r = SteerRamp::default();
+        let left = Input::from_keys(true, false, false, false);
+        let right = Input::from_keys(false, true, false, false);
+        for _ in 0..40 {
+            r.shape(left, true);
+        }
+        assert_eq!(r.shape(right, true).steer_level(), 1, "reversal starts low");
+        assert_eq!(r.shape(Input::NEUTRAL, true).steer_level(), 0);
+        assert_eq!(
+            r.shape(left, true).steer_level(),
+            -1,
+            "a new press starts low"
+        );
+    }
+
+    #[test]
+    fn the_stick_is_not_ramped() {
+        let mut r = SteerRamp::default();
+        let full = Input::from_axis(1.0, false, false);
+        assert_eq!(r.shape(full, false).steer_level(), 3);
     }
 
     #[test]
