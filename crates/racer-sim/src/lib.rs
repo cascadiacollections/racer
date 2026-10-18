@@ -20,6 +20,7 @@
 //! 4 m segments whose shape is stored as small integers, so a track is the
 //! same on every platform by construction, not by luck of float rounding.
 
+pub mod bot; // the perfect and human-like drivers that prove a track
 pub mod car; // speed, offset, the drift state machine
 pub mod dmath; // platform-stable trig, so the sim never calls libm
 pub mod hash; // FNV-1a, for track digests and the run state hash
