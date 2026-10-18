@@ -137,7 +137,7 @@ impl INode2D for Racer {
             self.upload();
         }
         #[cfg(feature = "profiling")]
-        if let Some(line) = self.profile.frame(delta, started.elapsed(), &self.g) {
+        for line in self.profile.frame(delta, started.elapsed(), &self.g) {
             godot_print!("{line}");
         }
     }

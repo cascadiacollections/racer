@@ -25,7 +25,12 @@ pub struct Profile {
     process: Stats,
     interval: Stats,
     clock: f64,
+    /// The last crest announced: (track index, segment).
+    crest: Option<(u32, usize)>,
 }
+
+/// A crest this close ahead is announced, metres.
+pub const CREST_AHEAD: f64 = 60.0;
 
 fn ms(d: Duration) -> f64 {
     d.as_secs_f64() * 1000.0
@@ -37,9 +42,34 @@ impl Profile {
         self.raster.push(ms(d));
     }
 
-    /// A frame ended: `delta` since the last, `process` spent in it. Returns
-    /// a summary line every [`WINDOW`] seconds of unpaused racing.
-    pub fn frame(&mut self, delta: f64, process: Duration, g: &Game) -> Option<String> {
+    /// A frame ended. Returns the lines to log: a `racer-event` when a
+    /// blind crest comes within [`CREST_AHEAD`] (so a screenshot can be
+    /// taken on it), and the summary.
+    pub fn frame(&mut self, delta: f64, process: Duration, g: &Game) -> Vec<String> {
+        let mut out = Vec::new();
+        if let (Mode::Racing, Some(run)) = (g.mode, g.run.as_ref()) {
+            let t = run.race().track();
+            let z = run.race().car().z;
+            let from = t.index_at(z);
+            let to = t.index_at(z + CREST_AHEAD);
+            if let Some(i) = (from..=to).find(|&i| t.segments()[i].has(flags::CREST)) {
+                if self.crest != Some((run.index(), i)) {
+                    self.crest = Some((run.index(), i));
+                    out.push(format!(
+                        "racer-event: crest ahead track {} seg {} in {:.0} m",
+                        run.index() + 1,
+                        i,
+                        i as f64 * racer_sim::track::SEG_LEN - z
+                    ));
+                }
+            }
+        }
+        out.extend(self.summary(delta, process, g));
+        out
+    }
+
+    /// The summary line every [`WINDOW`] seconds of unpaused racing.
+    fn summary(&mut self, delta: f64, process: Duration, g: &Game) -> Option<String> {
         if g.mode != Mode::Racing || g.paused {
             self.raster.clear();
             self.process.clear();

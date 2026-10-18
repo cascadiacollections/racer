@@ -45,6 +45,11 @@ pub struct Camera {
     pub near: f64,
     /// Segments drawn ahead of the camera.
     pub draw_segs: usize,
+    /// Hills are drawn this many times their height. Seen from a chase
+    /// camera above the car, the sim's 5–10 m hills flatten into a few
+    /// rows; exaggerating them is how a pseudo-3D road makes a crest read.
+    /// Presentation only: the sim's sight lines are unchanged.
+    pub hills: f64,
 }
 
 impl Camera {
@@ -59,6 +64,7 @@ impl Camera {
         min_horizon: 0.25,
         near: 0.5,
         draw_segs: 120,
+        hills: 2.0,
     };
 
     /// Rows from the horizon down to the road under the car on the flat.
@@ -157,7 +163,7 @@ impl RoadView {
     /// Project `track` for a car at `car_z`, `car_x` into a `w` by `h` view.
     pub fn build(track: &Track, car_z: f64, car_x: f64, w: i32, h: i32, cam: Camera) -> RoadView {
         let cam_z = car_z - cam.back;
-        let cam_y = track.elevation_at(cam_z.max(0.0)) + cam.height;
+        let cam_y = track.elevation_at(cam_z.max(0.0)) * cam.hills + cam.height;
         let horizon = (h - cam.car_margin - cam.car_drop().round() as i32)
             .max((h as f64 * cam.min_horizon).round() as i32);
         let base = (cam_z / SEG_LEN).floor() as i64;
@@ -179,7 +185,7 @@ impl RoadView {
         v.pts.push(Pt {
             z: cam_z,
             off,
-            elev: track.elevation_at(cam_z.max(0.0)),
+            elev: track.elevation_at(cam_z.max(0.0)) * cam.hills,
         });
         let mut max_y = h;
         for n in 0..cam.draw_segs {
@@ -196,7 +202,7 @@ impl RoadView {
             v.pts.push(Pt {
                 z,
                 off,
-                elev: track.elevation_at(z.max(0.0)),
+                elev: track.elevation_at(z.max(0.0)) * cam.hills,
             });
             v.clips.push(max_y);
             if max_y <= 0 {
@@ -398,7 +404,12 @@ mod tests {
             })
             .unwrap() as i64;
         let climbing = view(&t, 34.0 * SEG_LEN, 0.0);
-        assert!(climbing.visible(peak - 1), "the summit is in view");
+        // The hilltop line: the last few segments before the summit are
+        // nearly level and may round onto the same row.
+        assert!(
+            (peak - 3..peak).any(|s| climbing.visible(s)),
+            "the summit is in view"
+        );
         let hidden: Vec<i64> = (peak + 1..peak + 20)
             .filter(|s| !climbing.visible(*s))
             .collect();
