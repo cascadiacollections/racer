@@ -141,6 +141,7 @@ pub enum Item {
     Save,
     Copy,
     Name,
+    Biome,
     Paste,
     Seed,
     Blank,
@@ -150,12 +151,13 @@ pub enum Item {
 
 impl Item {
     /// The menu, in order: two columns.
-    pub const ALL: [Item; 10] = [
+    pub const ALL: [Item; 11] = [
         Item::TestDrive,
         Item::Prove,
         Item::Save,
         Item::Copy,
         Item::Name,
+        Item::Biome,
         Item::Paste,
         Item::Seed,
         Item::Blank,
@@ -171,6 +173,7 @@ impl Item {
             Item::Save => "SAVE",
             Item::Copy => "COPY CODE",
             Item::Name => "NAME",
+            Item::Biome => "BIOME",
             Item::Paste => "PASTE CODE",
             Item::Seed => "FROM SEED",
             Item::Blank => "NEW BLANK",

@@ -8,7 +8,13 @@
 //! what makes speed readable. Sprites are drawn far to near, each from its
 //! nearest pre-drawn size and clipped at the hilltop its segment was drawn
 //! under (DESIGN §5).
+//!
+//! A scene carries its [`Biome`] (DESIGN §5.1): the frame is painted in the
+//! biome's palette, under its backdrop ([`crate::scenery`]), with its
+//! flora and posts. The road, its kerbs and surfaces, the cars, the HUD
+//! and the pad are drawn in the same indices everywhere.
 
+use racer_sim::biome::Biome;
 use racer_sim::car::{Car, Drift, MINI_CHARGE, SUPER_CHARGE};
 use racer_sim::input::Input;
 use racer_sim::race::Race;
@@ -19,6 +25,7 @@ use crate::layout::{Layout, Rect};
 use crate::palette::*;
 use crate::project::{half_width, Camera, Placed, RoadView, Row, STRIPE_SEGS};
 use crate::raster::{Canvas, Sprite};
+use crate::scenery;
 use crate::sprites::{Art, CarFrame, Steps, CAR_H, CAR_W};
 
 /// How far ahead a drift-required corner is announced, metres.
@@ -55,10 +62,13 @@ pub struct RaceScene<'a> {
     /// The player's time against the ghost's at the last gate, ticks
     /// (negative is ahead), while it is shown.
     pub ghost_note: Option<i64>,
+    /// The scenery: the palette, backdrop and roadside things.
+    pub biome: Biome,
 }
 
 impl<'a> RaceScene<'a> {
-    /// The scene of a live race.
+    /// The scene of a live race, track `index` of a run, in that track's
+    /// biome ([`Biome::of_track`]; a custom race sets its layout's).
     pub fn of(race: &'a Race, index: u32, tracks: u32, bg_shift: i32) -> Self {
         RaceScene {
             track: race.track(),
@@ -73,6 +83,7 @@ impl<'a> RaceScene<'a> {
             bg_shift,
             ghost: None,
             ghost_note: None,
+            biome: Biome::of_track(index),
         }
     }
 
@@ -101,8 +112,8 @@ pub struct Held {
     pub drift: bool,
 }
 
-/// Roadside decoration that is not in the sim: trees, and the warning
-/// boards before drift corners. Presentation only, placed from a hash of
+/// Roadside decoration that is not in the sim: trees (or the biome's
+/// flora), and the warning boards before drift corners. Presentation only, placed from a hash of
 /// the segment, beyond the barrier where nothing can hit it.
 #[derive(Clone, Debug, Default)]
 pub struct Decor {
@@ -123,7 +134,7 @@ pub struct DecorItem {
 /// Kinds of decor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DecorKind {
-    /// A tree.
+    /// A tree: drawn as the biome's flora ([`Art::flora`]).
     Tree,
     /// A bend board pointing right.
     ChevronRight,
@@ -135,8 +146,12 @@ pub enum DecorKind {
 pub const SIGN_LEAD: usize = 15;
 
 impl Decor {
-    /// The decor of `track`.
-    pub fn new(track: &Track) -> Decor {
+    /// The decor of `track` in `biome`. The boards are the same in every
+    /// biome; the flora's spacing is the biome's: the meadow's trees on one
+    /// segment in five, as before biomes, palms one in six, cacti one in
+    /// eight, pines one in three, and street lights in a regular row either
+    /// side, every 48 m.
+    pub fn new(track: &Track, biome: Biome) -> Decor {
         let segs = track.segments();
         let mut items = Vec::new();
         // Boards along every drift corner and its approach, on the outside.
@@ -175,9 +190,31 @@ impl Decor {
                 });
             }
         }
+        let every = match biome {
+            Biome::Meadow => 5,
+            Biome::Coast => 6,
+            Biome::Desert => 8,
+            Biome::Alpine => 3,
+            Biome::Night => 0,
+        };
         for (s, seg) in segs.iter().enumerate() {
+            if every == 0 {
+                // Street lights: a regular row, staggered either side, just
+                // past the verge.
+                let side = match s % 12 {
+                    0 => -1.0,
+                    6 => 1.0,
+                    _ => continue,
+                };
+                items.push(DecorItem {
+                    seg: s as u32,
+                    x: side * (seg.half_width() + VERGE + 1.5),
+                    kind: DecorKind::Tree,
+                });
+                continue;
+            }
             let h = mix64(s as u64 ^ 0x7EE5_0000);
-            if h.is_multiple_of(5) {
+            if h.is_multiple_of(every) {
                 let side = if (h >> 8) & 1 == 0 { -1.0 } else { 1.0 };
                 let d = seg.half_width() + VERGE + 2.5 + ((h >> 16) % 80) as f64 / 10.0;
                 items.push(DecorItem {
@@ -218,26 +255,6 @@ fn surface_ink(s: Surface, light: bool) -> (u8, u8, u8) {
         (Surface::Puddle, true) => (WATER, WATER, 0),
         (Surface::Puddle, false) => (WATER, ASPHALT_DK, 6),
     }
-}
-
-/// Height of the far hills at background column `x`, pixels.
-fn hill_height(x: i32) -> i32 {
-    let tri = |x: i32, p: i32| -> i32 {
-        let m = x.rem_euclid(p);
-        (p / 2 - (m - p / 2).abs()) * 2 * 64 / p
-    };
-    4 + (tri(x, 157) * 14 + tri(x + 40, 61) * 7 + tri(x + 13, 23) * 2) / 64
-}
-
-/// Height of the near, green hills at background column `x`, pixels: lower
-/// and rounder than the far range, so the two read as separate distances.
-fn near_hill_height(x: i32) -> i32 {
-    let bump = |x: i32, p: i32| -> i32 {
-        // A parabola per period: rounded tops, sharp valleys.
-        let m = x.rem_euclid(p) - p / 2;
-        (p * p / 4 - m * m) * 64 / (p * p / 4)
-    };
-    1 + (bump(x, 97) * 5 + bump(x + 31, 53) * 3) / 64
 }
 
 /// One cloud: a few overlapping ellipses, in sky coordinates where x is a
@@ -307,11 +324,20 @@ fn cloud_at(bx: i32, y: i32, blobs: &[(i32, i32, i32, i32)]) -> Option<u8> {
     hit
 }
 
-/// Sky, clouds, the far and near hills, then the road row by row. Each
-/// layer scrolls with its own share of `bg_shift` (parallax): clouds a
-/// third, the far range all of it, the near hills twice it.
-fn road_rows(c: &mut Canvas, v: &RoadView, track: &Track, bg_shift: i32, gates: &[u32]) {
+/// Sky, clouds (in a biome that has them), the road row by row, then the
+/// biome's backdrop on the horizon ([`scenery::backdrop`]). Each layer
+/// scrolls with its own share of `bg_shift` (parallax): clouds a third,
+/// the far range all of it, the near layer twice it.
+fn road_rows(
+    c: &mut Canvas,
+    v: &RoadView,
+    track: &Track,
+    bg_shift: i32,
+    gates: &[u32],
+    biome: Biome,
+) {
     let w = v.w;
+    let clouds = scenery::has_clouds(biome);
     for y in 0..v.h {
         match v.rows[y as usize] {
             Some(r) => road_row(c, y, w, &r, track, gates),
@@ -319,6 +345,9 @@ fn road_rows(c: &mut Canvas, v: &RoadView, track: &Track, bg_shift: i32, gates: 
             None => {
                 let frac = ((y * 16) / v.horizon.max(1)).clamp(0, 16) as u8;
                 c.dither_span(0, w, y, SKY_HI, SKY_LO, frac);
+                if !clouds {
+                    continue;
+                }
                 let blobs = cloud_row(y, v.horizon);
                 if !blobs.is_empty() {
                     for x in 0..w {
@@ -330,21 +359,8 @@ fn road_rows(c: &mut Canvas, v: &RoadView, track: &Track, bg_shift: i32, gates: 
             }
         }
     }
-    // Hills on the horizon, under any road that rises above it: the far
-    // range, then the near green hills in front of it.
-    for (height, shift, colour) in [
-        (hill_height as fn(i32) -> i32, bg_shift, HILLS),
-        (near_hill_height as fn(i32) -> i32, bg_shift * 2, GRASS_DK),
-    ] {
-        for x in 0..w {
-            let top = v.horizon - height(x + shift);
-            for y in top.max(0)..v.horizon.min(v.h) {
-                if v.rows[y as usize].is_none() {
-                    c.put(x, y, colour);
-                }
-            }
-        }
-    }
+    // The horizon's layers, under any road that rises above it.
+    scenery::backdrop(c, v, bg_shift, biome);
 }
 
 fn road_row(c: &mut Canvas, y: i32, w: i32, r: &Row, track: &Track, gates: &[u32]) {
@@ -432,8 +448,11 @@ fn stand<'a>(out: &mut Vec<Thing<'a>>, steps: &'a Steps, at: Option<Placed>, fli
     }
 }
 
-/// Paint the road view (`l.road`) and return its projection.
+/// Paint the road view (`l.road`) and return its projection. Sets the
+/// canvas to the scene's biome's palette first, so everything drawn over
+/// it this frame (the HUD, the pad, a menu) is in that palette too.
 pub fn road(c: &mut Canvas, l: &Layout, art: &Art, decor: &Decor, s: &RaceScene) -> RoadView {
+    c.set_palette(palette(s.biome));
     let v = RoadView::build(
         s.track,
         s.car.z,
@@ -442,13 +461,13 @@ pub fn road(c: &mut Canvas, l: &Layout, art: &Art, decor: &Decor, s: &RaceScene)
         l.road.h,
         Camera::DEFAULT,
     );
-    road_rows(c, &v, s.track, s.bg_shift, s.track.checkpoints());
+    road_rows(c, &v, s.track, s.bg_shift, s.track.checkpoints(), s.biome);
     let (from, to) = (v.base, v.base + v.cam.draw_segs as i64);
     let mut things: Vec<Thing> = Vec::new();
     for d in decor.between(from, to) {
         let at = v.place(d.seg as f64 * SEG_LEN + 0.01, d.x);
         match d.kind {
-            DecorKind::Tree => stand(&mut things, &art.tree, at, d.x < 0.0),
+            DecorKind::Tree => stand(&mut things, art.flora(s.biome), at, d.x < 0.0),
             DecorKind::ChevronRight => stand(&mut things, &art.chevron, at, false),
             DecorKind::ChevronLeft => stand(&mut things, &art.chevron, at, true),
         }
@@ -456,7 +475,7 @@ pub fn road(c: &mut Canvas, l: &Layout, art: &Art, decor: &Decor, s: &RaceScene)
     let (fa, ta) = (from.max(0) as usize, to.max(0) as usize);
     for o in s.track.objects_in(fa, ta) {
         let steps = match o.kind {
-            ObjectKind::Post => &art.post,
+            ObjectKind::Post => art.post_for(s.biome),
             ObjectKind::Rock => &art.rock,
         };
         stand(&mut things, steps, v.place(o.z(), o.x()), false);
@@ -595,6 +614,16 @@ pub fn ghost_delta(delta: i64) -> String {
     format!("GHOST {sign}{}.{}S", tenths / 10, tenths % 10)
 }
 
+/// The ink of good news on the HUD (the ghost behind you) in biome `b`: a
+/// green that reads on ink in that biome's palette.
+pub fn ahead_ink(b: Biome) -> u8 {
+    match b {
+        Biome::Meadow => GRASS_LT,
+        Biome::Coast | Biome::Alpine | Biome::Desert => HILLS,
+        Biome::Night => ICE,
+    }
+}
+
 /// Seconds as `12.3`.
 pub fn secs(ticks: u32) -> String {
     let tenths = (ticks as u64 * 10).div_ceil(racer_sim::TICKS_PER_SEC as u64);
@@ -658,7 +687,7 @@ pub fn hud(c: &mut Canvas, l: &Layout, s: &RaceScene) {
     if let Some(d) = s.ghost_note {
         let text = ghost_delta(d);
         let w = crate::font::small_width(&text) as i32;
-        let ink = if d <= 0 { GRASS_LT } else { RED };
+        let ink = if d <= 0 { ahead_ink(s.biome) } else { RED };
         c.rect(l.road.w - w - 5, 12, w + 4, 9, INK);
         c.text(l.road.w - w - 3, 14, &text, ink, 1);
     }
@@ -763,6 +792,7 @@ pub(crate) mod tests {
             bg_shift: 0,
             ghost: None,
             ghost_note: None,
+            biome: Biome::Meadow,
         }
     }
 
@@ -770,7 +800,7 @@ pub(crate) mod tests {
         let l = Layout::new(h);
         let mut c = Canvas::new(l.w, l.h);
         let art = Art::new();
-        let decor = Decor::new(s.track);
+        let decor = Decor::new(s.track, s.biome);
         race_frame(&mut c, &l, &art, &decor, s, Held::default());
         c
     }
@@ -828,14 +858,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn the_near_hills_sit_lower_than_the_far_range() {
-        let far = (0..1000).map(hill_height).max().unwrap();
-        let near = (0..1000).map(near_hill_height).max().unwrap();
-        assert!(near < far, "near {near} vs far {far}");
-        assert!((0..1000).all(|x| near_hill_height(x) >= 1));
-    }
-
-    #[test]
     fn a_frame_is_palette_only_with_sky_on_top_grass_aside_and_road_under_the_car() {
         let t = fixtures::drag_strip();
         let s = scene(&t, 40.0, 0.0, 0);
@@ -863,6 +885,87 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn every_biome_paints_in_its_own_sixteen_colours() {
+        let show = showcase();
+        let frames: Vec<(Biome, Canvas)> = Biome::ALL
+            .iter()
+            .map(|&b| (b, draw(&biome_scene(&show, b), 360)))
+            .collect();
+        for (b, c) in &frames {
+            assert!(c.palette_only(), "{b:?}");
+            assert_eq!(c.palette(), palette(*b));
+            // A biome's scenery shows: some pixel is one of its own
+            // scenery colours, not one any other biome has.
+            if *b != Biome::Meadow {
+                let mut meadow = c.clone();
+                meadow.set_palette(&COLOURS);
+                assert!(!meadow.palette_only(), "{b:?} shows its colours");
+            }
+        }
+        for (i, (a, x)) in frames.iter().enumerate() {
+            for (b, y) in &frames[i + 1..] {
+                assert_ne!(x.digest(), y.digest(), "{a:?} and {b:?}");
+            }
+        }
+        // The road, the car and the HUD are the same indices everywhere:
+        // the pad and the HUD strip are byte for byte the meadow's.
+        let l = Layout::new(360);
+        for (b, c) in &frames {
+            for y in l.hud.y..l.h {
+                for x in 0..l.w {
+                    assert_eq!(c.get(x, y), frames[0].1.get(x, y), "{b:?} at {x},{y}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_good_news_ink_reads_on_the_hud_in_every_biome() {
+        for b in Biome::ALL {
+            let p = palette(b);
+            let ink = p[ahead_ink(b) as usize];
+            assert!(contrast(ink, p[INK as usize]) >= 4.5, "{b:?}");
+            assert!(distance(ink, p[RED as usize]) >= 80.0, "{b:?}: not the red");
+        }
+    }
+
+    #[test]
+    fn night_has_street_lights_in_rows_and_stars_not_clouds() {
+        let show = showcase();
+        let d = Decor::new(&show, Biome::Night);
+        let lamps: Vec<_> = d
+            .items()
+            .iter()
+            .filter(|i| i.kind == DecorKind::Tree)
+            .collect();
+        assert!(lamps.iter().all(|i| i.seg % 6 == 0));
+        assert!(lamps.iter().any(|i| i.x < 0.0) && lamps.iter().any(|i| i.x > 0.0));
+        for i in &lamps {
+            let hw = show.segments()[i.seg as usize].half_width();
+            assert!(i.x.abs() > hw + VERGE, "beyond the verge");
+        }
+        // The meadow's trees are where they always were: one segment in
+        // five by the same hash; other biomes are denser or sparser.
+        let trees = |b| {
+            Decor::new(&show, b)
+                .items()
+                .iter()
+                .filter(|i| i.kind == DecorKind::Tree)
+                .count()
+        };
+        assert!(trees(Biome::Alpine) > trees(Biome::Meadow));
+        assert!(trees(Biome::Desert) < trees(Biome::Meadow));
+        assert!(!scenery::has_clouds(Biome::Night) && !scenery::has_clouds(Biome::Desert));
+        // At night the sky's top rows hold stars (white) on the dark.
+        let c = draw(&biome_scene(&show, Biome::Night), 360);
+        let stars = (0..40)
+            .flat_map(|y| (0..180).map(move |x| (x, y)))
+            .filter(|&(x, y)| c.get(x, y) == rgba(WHITE))
+            .count();
+        assert!(stars >= 5, "{stars} stars");
+    }
+
+    #[test]
     fn surfaces_and_kerbs_take_their_colours() {
         let t = showcase();
         // Car on the gravel run-in: the road under it is gravel.
@@ -882,7 +985,7 @@ pub(crate) mod tests {
     #[test]
     fn decor_signs_the_outside_of_drift_corners_ahead_of_them() {
         let t = showcase();
-        let d = Decor::new(&t);
+        let d = Decor::new(&t, Biome::Meadow);
         let signs: Vec<_> = d
             .items()
             .iter()
@@ -1033,7 +1136,6 @@ pub(crate) mod tests {
         s.bg_shift = 30;
         let b = draw(&s, 320);
         assert_ne!(a.digest(), b.digest());
-        assert!((0..180).all(|x| hill_height(x) > 0 && hill_height(x) < 30));
     }
 
     /// FNV digests of fixed scenes. A change to the renderer that moves a
@@ -1087,7 +1189,32 @@ pub(crate) mod tests {
         s.ghost = Some((60.0 * SEG_LEN + 7.0, -2.0));
         s.ghost_note = Some(-96);
         out.push(("ghost_ahead", draw(&s, 360)));
+        // One scene per biome but the meadow's (every scene above is a
+        // meadow): the showcase's run-up, posts, rock and traffic ahead,
+        // the backdrop scrolled to show its layers.
+        for b in &Biome::ALL[1..] {
+            out.push((biome_scene_name(*b), draw(&biome_scene(&show, *b), 360)));
+        }
         out
+    }
+
+    /// The golden scene of biome `b`.
+    pub(crate) fn biome_scene(show: &Track, b: Biome) -> RaceScene<'_> {
+        let mut s = scene(show, 22.0 * SEG_LEN, -0.5, 0);
+        s.biome = b;
+        s.bg_shift = 37;
+        s
+    }
+
+    /// Its name among the golden frames.
+    pub(crate) fn biome_scene_name(b: Biome) -> &'static str {
+        match b {
+            Biome::Meadow => "biome_meadow",
+            Biome::Coast => "biome_coast",
+            Biome::Alpine => "biome_alpine",
+            Biome::Desert => "biome_desert",
+            Biome::Night => "biome_night",
+        }
     }
 
     /// A desktop raster micro-benchmark: `cargo test --release -p
@@ -1100,19 +1227,22 @@ pub(crate) mod tests {
         let t = fixtures::sweep_and_hairpin();
         let l = Layout::new(360);
         let art = Art::new();
-        let decor = Decor::new(&t);
         let mut c = Canvas::new(l.w, l.h);
         let n = 4000;
-        let mut s = scene(&t, 20.0 * SEG_LEN, 0.5, 1);
-        let start = std::time::Instant::now();
-        for i in 0..n {
-            s.car.z = 20.0 * SEG_LEN + (i % 400) as f64 * 0.5;
-            s.bg_shift = i / 4;
-            race_frame(&mut c, &l, &art, &decor, &s, Held::default());
+        for biome in Biome::ALL {
+            let decor = Decor::new(&t, biome);
+            let mut s = scene(&t, 20.0 * SEG_LEN, 0.5, 1);
+            s.biome = biome;
+            let start = std::time::Instant::now();
+            for i in 0..n {
+                s.car.z = 20.0 * SEG_LEN + (i % 400) as f64 * 0.5;
+                s.bg_shift = i / 4;
+                race_frame(&mut c, &l, &art, &decor, &s, Held::default());
+            }
+            let us = start.elapsed().as_secs_f64() * 1e6 / n as f64;
+            println!("raster_bench {biome:?}: {us:.1} us per frame ({n} frames)");
+            assert!(c.palette_only());
         }
-        let us = start.elapsed().as_secs_f64() * 1e6 / n as f64;
-        println!("raster_bench: {us:.1} us per frame ({n} frames)");
-        assert!(c.palette_only());
     }
 
     #[test]
@@ -1124,5 +1254,9 @@ pub(crate) mod tests {
         for (name, c) in golden_scenes() {
             std::fs::write(dir.join(format!("{name}.ppm")), c.ppm()).unwrap();
         }
+        // The meadow's biome scene too, beside the others for comparison.
+        let show = showcase();
+        let c = draw(&biome_scene(&show, Biome::Meadow), 360);
+        std::fs::write(dir.join("biome_meadow.ppm"), c.ppm()).unwrap();
     }
 }

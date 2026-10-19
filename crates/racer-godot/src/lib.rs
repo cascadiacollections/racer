@@ -50,6 +50,7 @@ pub mod profiling;
 pub mod project;
 pub mod raster;
 pub mod render;
+pub mod scenery;
 pub mod screens;
 pub mod sprites;
 pub mod touch;

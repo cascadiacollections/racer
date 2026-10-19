@@ -3,6 +3,7 @@
 //! Salt Line). Racing is [`crate::render`]; this adds the title, the fork
 //! cards, the results and the pause overlay. Engine-free.
 
+use racer_sim::biome::Biome;
 use racer_sim::car::Car;
 use racer_sim::gen::difficulty::TRACKS;
 use racer_sim::input::Input;
@@ -22,6 +23,9 @@ use crate::touch::{Action, Button};
 pub fn frame(g: &mut Game, c: &mut Canvas, art: &Art) -> Vec<Button> {
     let l = g.layout;
     c.resize(l.w, l.h);
+    // Menus and the editor in the meadow's colours; a road view sets its
+    // biome's (`render::road`).
+    c.set_palette(&COLOURS);
     match g.mode {
         Mode::Title | Mode::Building => title(g, c, art, &l),
         Mode::Racing => racing(g, c, art, &l),
@@ -73,11 +77,14 @@ fn title(g: &Game, c: &mut Canvas, art: &Art, l: &Layout) -> Vec<Button> {
         bg_shift: (g.clock * 4.0) as i32,
         ghost: None,
         ghost_note: None,
+        biome: g.title_biome(),
     };
-    render::road(c, l, art, &g.title_decor, &scene);
+    render::road(c, l, art, &g.title_decor[scene.biome as usize], &scene);
     let cx = l.w / 2;
     banner(c, cx, 30, "RACER", YELLOW, 5);
     banner(c, cx, 62, "EVERY ROAD PROVEN", WHITE, 1);
+    // Which of the five looks is rolling by.
+    banner(c, cx, 74, scene.biome.name(), ICE, 1);
     let h = l.hud;
     c.rect(h.x, h.y, h.w, h.h, INK);
     c.text_centred(cx, h.y + 3, "ARROWS STEER  DOWN BRAKE", ASPHALT_LT, 1);
@@ -120,6 +127,7 @@ fn racing(g: &Game, c: &mut Canvas, art: &Art, l: &Layout) -> Vec<Button> {
         return Vec::new();
     };
     let mut scene = RaceScene::of(run.race(), run.index(), run.tracks(), g.bg.round() as i32);
+    scene.biome = g.biome;
     scene.ghost = g.ghost().map(|gh| (gh.car().z, gh.car().x));
     scene.ghost_note = g.ghost_note();
     let held = if g.paused { Held::default() } else { g.held };
@@ -322,8 +330,11 @@ fn fork(g: &mut Game, c: &mut Canvas, l: &Layout) -> Vec<Button> {
                     format!("CARS {}", s.cars),
                     format!("TIME {}S", secs(s.first_allot)),
                 ];
+                // The road's scenery first (DESIGN §5.1), then its numbers.
+                let y0 = pr.y + pr.h + 6;
+                c.text(r.x + 5, y0, Biome::of_track(index + 1).name(), ICE, 1);
                 for (k, line) in lines.iter().enumerate() {
-                    c.text(r.x + 5, pr.y + pr.h + 6 + k as i32 * 9, line, WHITE, 1);
+                    c.text(r.x + 5, y0 + (k as i32 + 1) * 9, line, WHITE, 1);
                 }
                 button(
                     &mut out,
@@ -513,8 +524,10 @@ mod tests {
         assert_eq!(g.mode, Mode::Fork);
         assert!(has(&b, Action::PickEasy) && has(&b, Action::PickHard));
         out.push(("fork", c));
+        assert_eq!(g.biome, Biome::Meadow, "the first track is a meadow");
         step(&mut g, vec![Event::Key(Key::Right)]);
         step(&mut g, vec![Event::Key(Key::Enter)]);
+        assert_eq!(g.biome, Biome::Coast, "the second track the coast");
         while g.mode == Mode::Racing {
             step(&mut g, vec![]);
         }

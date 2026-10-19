@@ -489,7 +489,8 @@ fn menu(ed: &Editor, c: &mut Canvas, l: &Layout) -> Vec<Button> {
     let (b, _) = badge(ed, 0.0);
     header(c, "EDITOR", &format!("{}  {}", title(ed), b));
     // Down in the thumb zone, above BACK.
-    let top = (l.bottom() - 36 - 5 * 33).max(44);
+    let rows = Item::ALL.len().div_ceil(2) as i32;
+    let top = (l.bottom() - 36 - rows * 33).max(44);
     for (k, item) in Item::ALL.iter().enumerate() {
         let (col, row) = (k as i32 % 2, k as i32 / 2);
         let r = Rect::new(4 + col * 87, top + row * 33, 85, 30);
@@ -501,13 +502,20 @@ fn menu(ed: &Editor, c: &mut Canvas, l: &Layout) -> Vec<Button> {
         if ed.focus == k {
             c.rect_outline(r.x, r.y, r.w, r.h, YELLOW);
         }
-        c.text_centred(
-            r.x + r.w / 2,
-            r.y + r.h / 2 - 2,
-            item.label(),
-            if dim { ASPHALT_LT } else { WHITE },
-            1,
-        );
+        let ink = if dim { ASPHALT_LT } else { WHITE };
+        if *item == Item::Biome {
+            // The label, and the biome it is on, which a tap moves on.
+            c.text_centred(r.x + r.w / 2, r.y + 7, item.label(), ink, 1);
+            c.text_centred(
+                r.x + r.w / 2,
+                r.y + 17,
+                ed.draft.layout.biome.name(),
+                ICE,
+                1,
+            );
+        } else {
+            c.text_centred(r.x + r.w / 2, r.y + r.h / 2 - 2, item.label(), ink, 1);
+        }
         push(&mut out, r, Act::Item(*item));
     }
     let hint = if ed.timed() {

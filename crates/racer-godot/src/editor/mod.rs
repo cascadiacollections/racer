@@ -751,6 +751,13 @@ impl Editor {
                 self.goto(Page::Name);
                 Vec::new()
             }
+            Item::Biome => {
+                // The next biome, in place: scenery only, so a proof stays.
+                let b = self.draft.layout.biome.next();
+                let out = self.edit(Edit::Biome(b));
+                self.say(format!("SCENERY: {}", b.name()));
+                out
+            }
             Item::Paste => {
                 self.page = Page::Edit;
                 vec![Out::Paste]
@@ -1041,12 +1048,28 @@ impl Editor {
                 }
                 let n = Item::ALL.len();
                 if p(bind::MENU_UP, bind::PAD_UP) {
-                    self.focus = (self.focus + n - 2) % n;
+                    // Up a row, or round to the column's last item.
+                    self.focus = if self.focus >= 2 {
+                        self.focus - 2
+                    } else {
+                        let last = (n - 1) / 2 * 2 + (self.focus & 1);
+                        if last < n {
+                            last
+                        } else {
+                            last - 2
+                        }
+                    };
                 } else if p(bind::MENU_DOWN, bind::PAD_DOWN) {
-                    self.focus = (self.focus + 2) % n;
+                    self.focus = if self.focus + 2 < n {
+                        self.focus + 2
+                    } else {
+                        self.focus & 1
+                    };
                 } else if p(bind::MENU_LEFT, bind::PAD_LEFT) || p(bind::MENU_RIGHT, bind::PAD_RIGHT)
                 {
-                    self.focus ^= 1;
+                    if self.focus ^ 1 < n {
+                        self.focus ^= 1;
+                    }
                 } else if enter || p(&[K::Space], &[]) {
                     return Some(Act::Item(Item::ALL[self.focus]));
                 } else if typed == Some(b'C') {
