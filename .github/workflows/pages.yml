@@ -99,7 +99,8 @@ jobs:
             test -s "site/$f" || { echo "missing site/$f"; exit 1; }
           done
           # Every local src/href in the page must resolve.
-          grep -oE '(src|href)="[^"#:]+"' site/index.html | cut -d'"' -f2 | sort -u |
+          # (__SITE_URL__ is stamped only when deploying.)
+          grep -oE '(src|href)="[^"#:]+"' site/index.html | cut -d'"' -f2 | grep -v __SITE_URL__ | sort -u |
             while read -r p; do test -s "site/$p" || { echo "broken link: $p"; exit 1; }; done
       # Pages is not enabled while the page is a draft, and configure-pages
       # fails without it, so the live base URL is only read when deploying.
