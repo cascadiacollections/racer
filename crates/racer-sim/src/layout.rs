@@ -38,6 +38,7 @@ pub mod code;
 use std::fmt;
 use std::sync::Arc;
 
+use crate::gen::difficulty::{PERFECT_LEFT, TARGET_SEGS};
 use crate::hash::Hasher;
 use crate::race::MAX_RACE_TICKS;
 use crate::rng::substream;
@@ -96,9 +97,16 @@ pub const CUSTOM_MARGIN: u32 = 3 * TICKS_PER_SEC / 2;
 pub const CUSTOM_LOADOUT: Loadout = Loadout::BASE;
 
 /// Version of the custom-race proof rules ([`CUSTOM_MARGIN`],
-/// [`CUSTOM_LOADOUT`], the checks run). Folded into every stamp, so a
-/// change to the rules leaves old stamps stale, as an epoch bump does.
-pub const PROOF_RULES: u32 = 1;
+/// [`CUSTOM_LOADOUT`], [`perfect_band`], the checks run). Folded into every
+/// stamp, so a change to the rules leaves old stamps [`Standing::Stale`],
+/// as an epoch bump does.
+///
+/// 1. Phase 1: the generated tracks' perfect-bot band (6–18 s) at any
+///    length.
+/// 2. Phase 2: the band scales with the layout's length ([`perfect_band`]).
+///    Every layout that proved under 1 proves under 2 to the same timers:
+///    the band only widened, and the timers do not depend on it.
+pub const PROOF_RULES: u32 = 2;
 
 /// The track index a layout's ghosts are kept under ([`Layout::ghost_key`]):
 /// past any run's, so a layout's ghost never meets a generated track's.
@@ -111,11 +119,41 @@ const HASH_TAG: u64 = 0x4C41_5954;
 /// Tag folded into a proof stamp: "STMP".
 const STAMP_TAG: u64 = 0x5354_4D50;
 
+/// The length the generated tracks' perfect-bot band ([`PERFECT_LEFT`]) is
+/// set for, segments to the finish: about a minute of road
+/// ([`TARGET_SEGS`]).
+pub const BAND_REF_SEGS: u32 = TARGET_SEGS as u32;
+
+/// The perfect bot's band for a layout whose finish is `finish_segs`
+/// segments up the road, ticks (DESIGN §9.4).
+///
+/// The generated band, 6–18 s left, is set for a minute of road. The time a
+/// perfect driver has in hand grows with the road (the timers are set from
+/// a typical driver's times, 8–30% over the perfect one), so a fixed band
+/// fails every long layout at the top and short ones at the bottom. So the
+/// band stretches: past [`BAND_REF_SEGS`] its top edge grows in proportion
+/// to the length (three minutes of road: 18 s becomes 54 s); below it, its
+/// bottom edge shrinks in proportion (a 30 s sprint needs 3 s in hand, not
+/// 6). The other edge stays, so the band only ever widens, and a layout of
+/// a minute is held to exactly the generated band. Generated tracks never
+/// use this: their band is [`PERFECT_LEFT`] whatever their length.
+pub fn perfect_band(finish_segs: u32) -> (u32, u32) {
+    let (lo, hi) = PERFECT_LEFT;
+    let (f, r) = (finish_segs as u64, BAND_REF_SEGS as u64);
+    if f < r {
+        ((lo as u64 * f / r) as u32, hi)
+    } else {
+        (lo, (hi as u64 * f / r) as u32)
+    }
+}
+
 /// The rules every custom race is proven under: [`CUSTOM_MARGIN`], the
 /// base loadout only, the solver's default effort, and the difficulty bands
-/// and drift-corner test applied as to a generated track. `seed` is the
-/// layout's own noise seed.
-pub fn rules(seed: u64) -> Rules<'static> {
+/// and drift-corner test applied as to a generated track, with the
+/// perfect-bot band scaled to the layout's length ([`perfect_band`] of
+/// `finish_segs`, the finish gate's segment). `seed` is the layout's own
+/// noise seed.
+pub fn rules(seed: u64, finish_segs: u32) -> Rules<'static> {
     const LOADOUTS: &[Loadout] = &[CUSTOM_LOADOUT];
     Rules {
         margin: CUSTOM_MARGIN,
@@ -123,11 +161,13 @@ pub fn rules(seed: u64) -> Rules<'static> {
         seed,
         effort: Effort::default(),
         strict: true,
+        perfect_left: perfect_band(finish_segs),
     }
 }
 
 /// The rules [`rules`] gives, for documentation and the tools.
-pub const RULES: &str = "base loadout, 1.5 s margin at every gate, default effort, strict bands";
+pub const RULES: &str =
+    "base loadout, 1.5 s margin at every gate, default effort, strict bands (perfect band scaled with length)";
 
 /// A track written down. Every field is an integer the [`Track`] it builds
 /// holds as it is; nothing is derived until [`Layout::track`].
@@ -290,9 +330,15 @@ pub fn valid_name(name: &str) -> bool {
 /// The stamp over a layout's digest `hash`, its timers and `epoch`, under
 /// [`PROOF_RULES`].
 pub fn stamp(hash: u64, allot_ticks: &[u32], epoch: u32) -> u32 {
+    stamp_under(PROOF_RULES, hash, allot_ticks, epoch)
+}
+
+/// [`stamp`] under rules version `rules`: how a stamp from older rules is
+/// told apart ([`Standing::Stale`]) from a bad one.
+pub fn stamp_under(rules: u32, hash: u64, allot_ticks: &[u32], epoch: u32) -> u32 {
     let mut h = Hasher::new();
     h.write_u64(STAMP_TAG);
-    h.write_u32(PROOF_RULES);
+    h.write_u32(rules);
     h.write_u32(epoch);
     h.write_u64(hash);
     h.write_usize(allot_ticks.len());
@@ -500,8 +546,13 @@ impl Layout {
         if p.epoch != crate::SIM_EPOCH {
             return Standing::Stale;
         }
-        if p.stamp == stamp(self.hash(), &p.allot_ticks, p.epoch) {
+        let hash = self.hash();
+        if p.stamp == stamp(hash, &p.allot_ticks, p.epoch) {
             Standing::Proven
+        } else if (1..PROOF_RULES).any(|r| p.stamp == stamp_under(r, hash, &p.allot_ticks, p.epoch))
+        {
+            // Proven under older rules: genuine, not this build's proof.
+            Standing::Stale
         } else {
             Standing::BadStamp
         }
@@ -527,7 +578,7 @@ impl Layout {
         let track = self.track().map_err(|p| ProveError::Problems(vec![p]))?;
         let rules = Rules {
             effort,
-            ..rules(self.seed())
+            ..rules(self.seed(), self.checkpoints.last().copied().unwrap_or(0))
         };
         let mut cost = 0;
         match check(&track, &rules, 0, &mut cost) {

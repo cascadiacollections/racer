@@ -273,6 +273,7 @@ fn validate(
         seed,
         effort,
         strict,
+        perfect_left: PERFECT_LEFT,
     };
     let mut cost = 0;
     let mut draft = draft.clone();
@@ -311,6 +312,10 @@ pub struct Rules<'a> {
     pub effort: Effort,
     /// Apply the difficulty bands and the drift-corner test.
     pub strict: bool,
+    /// The perfect bot's time left at the finish must fall in this band,
+    /// ticks, when `strict`: [`PERFECT_LEFT`] for every generated track; a
+    /// layout's scales with its length (`layout::perfect_band`).
+    pub perfect_left: (u32, u32),
 }
 
 /// How [`check`] ended.
@@ -339,6 +344,7 @@ pub fn check(untimed: &Track, rules: &Rules, drift_repairs: u32, cost: &mut u64)
         seed,
         effort,
         strict,
+        perfect_left: band,
     } = *rules;
     // 1. Calibrate on the weakest loadout.
     let untimed = Arc::new(untimed.clone());
@@ -366,7 +372,7 @@ pub fn check(untimed: &Track, rules: &Rules, drift_repairs: u32, cost: &mut u64)
     let human_ticks = cal.finishes[cal.finishes.len() / 2];
     let gap = (human_ticks as f64 - best.race.tick() as f64) / best.race.tick() as f64;
     if strict {
-        if !(PERFECT_LEFT.0..=PERFECT_LEFT.1).contains(&perfect_left) {
+        if !(band.0..=band.1).contains(&perfect_left) {
             return Checked::Failed(Failure::PerfectBand(perfect_left));
         }
         if !(SKILL_GAP.0..=SKILL_GAP.1).contains(&gap) {
