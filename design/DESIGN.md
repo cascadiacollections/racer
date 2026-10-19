@@ -294,8 +294,10 @@ racer-sim/                # Rust, no dependencies at all, no engine
   ├─ bot/                 # profile, control, perfect, human
   ├─ solver.rs            # validate + redraw/repair/fallback ladder
   ├─ replay.rs            # log codec, Replay, verified reconstruction
+  ├─ codec.rs             # bits, Rice, gamma, base32, CRC-16    [Salt Line]
+  ├─ layout.rs, layout/   # layouts: model, proof, codes, courses (§9)
   ├─ viz.rs               # ASCII strip of a track
-  └─ bin/                 # batch, determinism, trackviz
+  └─ bin/                 # batch, determinism, trackviz, layout
 racer-godot/              # gdext stub: one node reporting SIM_EPOCH (M1)
 ```
 
@@ -363,3 +365,223 @@ else.
 - Golden runs: six autoplay runs that win, lose, take both forks, brake and
   drift, replayed to their recorded hashes.
 - The determinism digest and the batch gate in CI.
+
+## 9. Layouts and the track editor
+
+**Status: Phase 1 built (October 2026)**: the data model, fork from a
+seed, proof, share codes, bundled courses, the `layout` host tools and the
+`--racer-layout` dev flag. No editor UI yet (Phase 2, §9.10). Salt Line's
+§13 is the model; where this section differs, §9.9 says why.
+
+**Owner decisions (October 2026), fixed:**
+
+- A layout is the quantised track itself, not a seed: it outlives the
+  generator.
+- Any generated track can be exported as a layout (fork from seed);
+  provenance is kept beside the code, not inside it.
+- Free drive needs no proof. PROVE runs the solver's validation on the
+  layout and sets its timers; only proven layouts race with a timer or are
+  shared as codes. A proven code carries its timers and a proof stamp.
+- Codes are compact, versioned, clipboard-safe text with a checksum.
+- 3–5 bundled courses ship as proven layouts.
+- Generation, goldens and the determinism digest do not move.
+
+### 9.1 Concepts
+
+| Term | Meaning |
+|---|---|
+| **Layout** | One track written down as data: segments, gates, objects, traffic, a name, and (once proven) its timers and stamp. `racer_sim::layout::Layout`. |
+| **Proof** | The solver's checks (§2.4) passed under the custom-race rules (§9.4); it sets the checkpoint timers. |
+| **Custom race** | A run of one layout's track (`RunState::single`): timed if proven, free drive if not. |
+| **Course** | A proven layout that ships with the game (§9.7). Multi-layout courses are later. |
+
+### 9.2 The data model
+
+A layout holds exactly the integers a `Track` is built from (§2.1), so
+nothing is quantised that was not already:
+
+| Field | Holds |
+|---|---|
+| `segments` | per 4 m segment: `curve_milli`, `pitch_milli`, `half_width_cm`, `surface`, `flags` (`DRIFT_REQ`, `DRIFT_HINT` only: `CREST` is derived) |
+| `checkpoints` | gate segment indices, ascending; the last is the finish (1–8 gates) |
+| `objects` | roadside objects: segment, `x_cm`, kind, in segment order |
+| `traffic` | cars: `z0_dm`, `speed_dms`, `lane_cm` (a pack is cars close together) |
+| `name` | up to 12 of `A`–`Z`, `0`–`9` and single inner spaces |
+| `proof` | `Some { allot_ticks, epoch, stamp }` once proven |
+
+**Why integers** (Salt Line's reasons, its §13.2): an edit is a whole
+number of steps, so undo and redo are exact; the code can delta-code
+without rounding; every device builds the same doubles. Unlike Salt Line
+there is no grid to choose: a generated track is already integers, so **a
+fork is the generated road exactly**. Its track, with the generated timers
+put back, *equals* the generated track (same `track_hash`), and the same
+inputs drive it to the same run state hash (tested).
+
+The digest (`Layout::hash`) covers the road only, not the name or the
+proof: renaming or re-proving keeps a layout's ghosts.
+
+Limits. Structural ones (`Layout::structure`: segment, gate, object and
+traffic counts, ascending gates, authored flags only, a valid name, the
+proof's shape) stop a layout being built or coded. Gameplay ones
+(`Layout::check`: at least 500 m, a 100 m launch before the first gate,
+turns of at most 180 mrad a segment, grades of at most 0.3, half widths
+3–8 m, objects within the verge, traffic starting 120 m up the road and
+before the finish, at 5–40 m/s, in a lane on the road) stop it being
+proven; each names the segment, object or car at fault, for the editor to
+mark.
+
+### 9.3 Fork from a seed, and provenance
+
+`layout::fork(run_seed, index, branch)` builds the track through the
+solver as a run would meet it and writes it down. The timers are not kept:
+they were set for the loadouts a run reaches that track with (§4.1), not
+for a custom race. The fork's `Provenance`
+(`fork:<seed>:<index>:<branch>:e<epoch>`) is written beside the code, as
+the `origin` line of a layout file; the epoch matters because the same key
+forks to another road after a bump.
+
+### 9.4 Proof
+
+`Layout::prove` runs `solver::check`, the one pass of §2.4 that the ladder
+also uses, under fixed **custom-race rules** (`layout::rules`):
+
+- the **base loadout** only (a custom race is driven with it);
+- a required margin of **1.5 s** at every gate (`CUSTOM_MARGIN`: the
+  middle of a run's 2.0–1.0 s);
+- the default effort: 16 calibration trials, then 16 verification trials
+  of which 15 must keep the margin;
+- strict: the perfect-bot band (6–18 s left), the skill-gap band (8–30%)
+  and the drift-corner two-bot test all apply;
+- noise seeds from the layout's digest, so proving is deterministic.
+
+No repairs: a layout is what its author made. A drift corner that is not
+demanding enough fails (`DriftCorner`) rather than being tightened; the
+author removes its `DRIFT_REQ` flag or sharpens it.
+
+**The stamp** is a 32-bit FNV digest over the layout's digest, the timers,
+`SIM_EPOCH` and `PROOF_RULES`. `Layout::standing` reads it without
+simulating anything: `Unproven`, `Proven`, `Stale` (another epoch: prove
+again) or `BadStamp` (edited after proving, or damaged: prove again). It is
+a digest, not a signature, and anyone can forge one, so **trust, then
+verify**: `Layout::verify` proves again (deterministic, so a genuine proof
+comes back `Confirmed`) and returns the layout with this build's timers if
+they differ. Proving costs **60–80 ms** on the desktop (one core;
+NOTES.md), so the dev flag verifies every code it loads; the Phase 2 game
+should too, off the main thread, as it builds tracks now.
+
+Under these rules **87% of generated tracks prove** as forked (450 tracks,
+NOTES.md): every first track, 71% of the hard last ones. The rest fail
+where their generated proof leaned on an upgrade or a smaller margin.
+
+### 9.5 Codes
+
+Two prefixes, one format (`layout/code.rs`). **`RL`** is the share code
+and always carries a proof; **`RD`** is a draft code, never proven, for
+files, the tools and (Phase 2) the editor's clipboard. Only `RL` codes are
+offered for sharing, so a shared code always races timed. After the
+prefix: Crockford base32 of a format byte (`LAYOUT_FORMAT` = 1), a
+bit-packed body and a CRC-16 (Salt Line's codec, `codec.rs`, unchanged).
+The body:
+
+- the curve and pitch channels: the first value, then first or second
+  differences (whichever is shorter), as plain Rice or zero runs and values
+  (whichever is shorter): Salt Line's residual coder;
+- half width, surface and flags as run lengths (Elias gamma);
+- gates as gaps; objects and traffic as steps from the one before, so post
+  rows and packs cost a few bits each;
+- the proof: timers, epoch and the 32-bit stamp.
+
+**Size.** Over 450 forked tracks: drafts median **553** characters, p95
+678, max 788; share codes median 572, max 814. The bundled courses are
+548–646, a hand-made 240-segment layout 95. Budget: every fork under 1 KB
+(tested).
+
+**Decoding is total**: text over 128 Ki characters is refused unread, every
+count is bounded before use, every read past the end is an error,
+neighbouring equal runs are refused (one spelling per road), the prefix
+must agree with the proof bit, and a decoded layout always passes
+`structure()`, so it always builds a track. Errors are typed (`CodeError`).
+Property tests round-trip random layouts (runs of equal segments, extreme
+values) and feed arbitrary text, arbitrary bodies under a valid checksum
+and single-character mutations of real codes; every single-character typo
+of the pinned code is caught.
+
+`SIM_EPOCH` and `LAYOUT_FORMAT` are independent, as in Salt Line: an epoch
+bump does not change what a layout *is*, only whether its proof still
+holds (`Stale`).
+
+### 9.6 Custom races and `--racer-layout`
+
+`Game::start_custom` races one layout as a run of one track
+(`RunState::single`; nothing about generated runs, their state hash or
+their replays changes). Timed if proven; otherwise free drive, with FREE
+where the time was and the race's 240 s cap. The best finish is kept as a
+ghost under `(layout digest, u32::MAX, 0)` in the existing ghost file.
+RETRY COURSE races it again. Custom races are not written as run files yet
+(a run file holds a seed, not a layout).
+
+`--racer-layout <code|path>` (Godot user args, `cli.rs`) starts one at
+launch; a path (`res://`, `user://` or a file) is read if it exists. The
+layout is verified first; one that does not read leaves the title up with
+a warning on the console.
+
+### 9.7 Bundled courses
+
+`layout/bundled.rs`: four proven share codes compiled in, easiest first,
+each a fork lightly tuned by hand, with its origin and tuning beside it:
+
+| Course | Origin | Tuning |
+|---|---|---|
+| FIRST LIGHT | seed 3, track 1 | a puddle after the first gate |
+| RIDGE RUN | seed 5, track 3 (hard side) | none |
+| GRAVEL PASS | seed 7, track 4 (easy side) | gravel over the drift corner |
+| LONG DUSK | seed 8, track 5 (easy side) | one traffic car fewer |
+
+Tests decode each, require no problems and a `Proven` stamp, prove each
+again to the timers it carries and to the generated tracks' bands, and (in
+the epoch they were made) hold each code to its recipe.
+
+### 9.8 Tools
+
+`bin/layout.rs`, through `just layout …`: `export --seed S --index I
+--branch B` (a draft code and its origin), `prove <code|file>` (the gate
+report, the time, the proven code), `show <code|file>` (a summary and the
+ASCII strip), `check [--verify] <files>`, `survey --seeds N` (the numbers
+in §9.4 and §9.5) and `bundled` (`just layout-courses`).
+
+### 9.9 Where this differs from Salt Line
+
+- **A proof is stamped onto the layout.** Salt Line validates on every load
+  (47 µs). Here proving is two bots over a minute of road, about 70 ms, and
+  it sets the timers, which are part of the race being shared; so the code
+  carries them, stamped, and an importer verifies.
+- **Two prefixes.** `RL` (proven) and `RD` (draft) make "only proven
+  layouts are shared" visible in the text itself.
+- **No quantisation grid.** A track is already integers, so a fork is exact
+  (Salt Line's forks move heights by up to 1/32).
+- **No width or wind**; the loadout is fixed (base) by the proof rules.
+- **Longer codes** (about 550 characters against 200): a minute of road has
+  twice Salt Line's samples, in five channels, plus objects and traffic.
+
+### 9.10 Phases and open questions
+
+| Phase | What |
+|---|---|
+| **1 (built)** | data model, fork, prove/stamp/verify, codes, bundled courses, tools, `--racer-layout` |
+| 2 | the in-game editor: a **top-down map** (the heading integrated from the curve, as trackviz draws it) over an **elevation strip**; touch-first tools (bend, straighten, hill, surface brush, gates, objects, traffic packs), also usable with keys and a pad; **fork from track** (the track just driven, from pause or results) and from a typed seed; **slots and a draft on disk** (Salt Line's layouts-file and draft rules); COPY/PASTE CODE on the clipboard; PROVE off the main thread with the gate report in words; the pseudo-3D view only for test drives; a course list for the bundled courses and slots |
+| 3 | courses of several layouts, played as a short run |
+| 4 | sharing through a relay |
+
+Open questions for Phase 2:
+
+- **Bands for any length.** The perfect-bot band is absolute (6–18 s left)
+  and set for minute-long tracks; a much longer layout overshoots it.
+  Scale the band with length, or cap layouts near a minute?
+- **The custom margin and loadout.** 1.5 s and the base loadout are a first
+  choice; should a layout choose a difficulty (margin) or a loadout?
+- **Proving on a phone.** 70 ms on the desktop is a few hundred on the
+  Pixel: verify on import in the background, or trust the stamp until the
+  layout is first raced?
+- **Replays of custom races**: a run file that carries the layout code.
+- **Ghosts across epochs** are dropped, like every ghost, even though the
+  road is the same.

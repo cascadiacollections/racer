@@ -41,6 +41,17 @@ digest:
 trackviz seed="1" index="0" branch="0" *flags:
     cargo run --release -p racer-sim --bin trackviz -- --seed {{ seed }} --index {{ index }} --branch {{ branch }} {{ flags }}
 
+# Layout tools (DESIGN §9): `just layout export --seed 7 --index 2 --branch 1`
+# (a draft code and its origin), `just layout prove course.txt` (the gate
+# report and the proven share code), `just layout show RL…`,
+# `just layout check --verify a.txt b.txt`, `just layout survey --seeds 50`.
+layout *args:
+    cargo run --release -q -p racer-sim --bin layout -- {{ args }}
+
+# List the bundled courses and prove each again to the timers it carries.
+layout-courses:
+    cargo run --release -q -p racer-sim --bin layout -- bundled
+
 # Regenerate the sounds and title music in art/audio (tools/gen_audio.py,
 # standard library only, byte-for-byte reproducible). Commit the result.
 gen-audio:

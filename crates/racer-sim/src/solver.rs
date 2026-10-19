@@ -267,117 +267,179 @@ fn validate(
     effort: Effort,
     strict: bool,
 ) -> Result<(Arc<Track>, Report), (Failure, u64)> {
-    let margin = required_margin(index);
+    let rules = Rules {
+        margin: required_margin(index),
+        loadouts,
+        seed,
+        effort,
+        strict,
+    };
     let mut cost = 0;
     let mut draft = draft.clone();
     let mut drift_repairs = 0;
     loop {
-        // 1. Calibrate on the weakest loadout.
-        let untimed = Arc::new(draft.track());
-        let (calib_on, _, c) = weakest(&untimed, loadouts);
-        cost += c;
-        let Some(cal) = calibrate(&untimed, calib_on, seed, margin, effort.calibration) else {
-            return Err((Failure::Undrivable, cost));
-        };
-        cost += cal.cost;
-        if cal.crashed * 4 > effort.calibration {
-            return Err((Failure::CrashProne, cost));
-        }
-        let mut timed = draft.track();
-        timed.set_allotments(cal.allot.clone());
-        let track = Arc::new(timed);
-
-        // 2. Ceiling.
-        let params = calib_on.params();
-        let best = perfect_run(&track, &params, true);
-        cost += best.cost;
-        if best.race.phase() != Phase::Finished {
-            return Err((Failure::PerfectFailed, cost));
-        }
-        let perfect_left = *best.race.margins().last().unwrap();
-        let human_ticks = cal.finishes[cal.finishes.len() / 2];
-        let gap = (human_ticks as f64 - best.race.tick() as f64) / best.race.tick() as f64;
-        if strict {
-            if !(PERFECT_LEFT.0..=PERFECT_LEFT.1).contains(&perfect_left) {
-                return Err((Failure::PerfectBand(perfect_left), cost));
-            }
-            if !(SKILL_GAP.0..=SKILL_GAP.1).contains(&gap) {
-                return Err((Failure::SkillGap(gap), cost));
-            }
-        }
-
-        // 3. Drift-required corners.
-        let mut drift = Vec::new();
-        if strict {
-            let grip = perfect_run(&track, &params, false);
-            cost += grip.cost;
-            drift = drift_checks(&track, &best, &grip, drift_repairs);
-            if let Some(weak) = drift.iter().find(|d| !d.grip_failed && d.loss < DRIFT_LOSS) {
+        match check(&draft.track(), &rules, drift_repairs, &mut cost) {
+            Checked::Passed(track, report) => return Ok((track, report)),
+            Checked::Failed(f) => return Err((f, cost)),
+            Checked::WeakDrift(start) => {
                 if drift_repairs == DRIFT_REPAIRS {
                     return Err((Failure::DriftCorner, cost));
                 }
                 drift_repairs += 1;
-                tighten(&mut draft, weak.start);
-                continue;
+                tighten(&mut draft, start);
             }
         }
-
-        // 4. Floor, on every reachable loadout.
-        let mut worst_margin = u32::MAX;
-        let mut fewest = effort.verify;
-        for &l in loadouts {
-            let p = l.params();
-            let plan = HumanPlan::new(&track, &p);
-            let mut passes = 0;
-            let mut short = vec![0u32; track.checkpoints().len()];
-            for trial in 0..effort.verify {
-                let mut race = Race::new(track.clone(), p);
-                drive(
-                    &mut race,
-                    &mut HumanBot::new(plan.clone(), substream(seed, VERIFY_TAG + trial)),
-                );
-                cost += race.tick() as u64;
-                worst_margin = worst_margin.min(race.min_margin());
-                if race.phase() == Phase::Finished && race.min_margin() >= margin {
-                    passes += 1;
-                } else {
-                    let k = race
-                        .margins()
-                        .iter()
-                        .position(|&m| m < margin)
-                        .unwrap_or(race.margins().len());
-                    let last = short.len() - 1;
-                    short[k.min(last)] += 1;
-                }
-                if trial + 1 - passes > effort.verify - effort.passes {
-                    break;
-                }
-            }
-            fewest = fewest.min(passes);
-            if passes < effort.passes {
-                let section = (0..short.len())
-                    .max_by_key(|&k| (short[k], usize::MAX - k))
-                    .unwrap();
-                return Err((Failure::Margins { passes, section }, cost));
-            }
-        }
-
-        return Ok((
-            track,
-            Report {
-                calibrated_on: calib_on,
-                loadouts: loadouts.len(),
-                perfect_left,
-                perfect_ticks: best.race.tick(),
-                human_ticks,
-                skill_gap: gap,
-                worst_margin,
-                fewest_passes: fewest,
-                drift,
-                cost,
-            },
-        ));
     }
+}
+
+/// What a track is held to: the margin every gate must keep, the loadouts
+/// it can be met with, the seed its noise comes from, how hard to look, and
+/// whether the difficulty bands and the drift-corner test apply.
+///
+/// A generated track's rules come from its key ([`build`]); a layout's are
+/// the same for every custom race (`layout::prove`, DESIGN §9.4).
+#[derive(Clone, Copy, Debug)]
+pub struct Rules<'a> {
+    /// Ticks every human verification trial must keep at every gate.
+    pub margin: u32,
+    /// Every loadout the track can be met with; calibration picks the
+    /// weakest.
+    pub loadouts: &'a [Loadout],
+    /// The seed calibration and verification noise is drawn from.
+    pub seed: u64,
+    /// Trial counts.
+    pub effort: Effort,
+    /// Apply the difficulty bands and the drift-corner test.
+    pub strict: bool,
+}
+
+/// How [`check`] ended.
+#[derive(Clone, Debug)]
+pub enum Checked {
+    /// Every check passed: the calibrated track and the evidence.
+    Passed(Arc<Track>, Report),
+    /// A check failed.
+    Failed(Failure),
+    /// Everything before the drift corners passed, but the drift-required
+    /// corner starting at this segment is not demanding enough. The ladder
+    /// tightens it and checks again; a layout fails
+    /// ([`Failure::DriftCorner`]).
+    WeakDrift(usize),
+}
+
+/// One pass of every check on an untimed track, in DESIGN §2.4's order:
+/// calibrate on the weakest loadout, the ceiling and skill-gap bands, the
+/// drift corners, and the floor on every loadout. `drift_repairs` is only
+/// recorded in the report. Adds the ticks simulated to `cost`, and a
+/// passing report's `cost` is that running total.
+pub fn check(untimed: &Track, rules: &Rules, drift_repairs: u32, cost: &mut u64) -> Checked {
+    let Rules {
+        margin,
+        loadouts,
+        seed,
+        effort,
+        strict,
+    } = *rules;
+    // 1. Calibrate on the weakest loadout.
+    let untimed = Arc::new(untimed.clone());
+    let (calib_on, _, c) = weakest(&untimed, loadouts);
+    *cost += c;
+    let Some(cal) = calibrate(&untimed, calib_on, seed, margin, effort.calibration) else {
+        return Checked::Failed(Failure::Undrivable);
+    };
+    *cost += cal.cost;
+    if cal.crashed * 4 > effort.calibration {
+        return Checked::Failed(Failure::CrashProne);
+    }
+    let mut timed = (*untimed).clone();
+    timed.set_allotments(cal.allot.clone());
+    let track = Arc::new(timed);
+
+    // 2. Ceiling.
+    let params = calib_on.params();
+    let best = perfect_run(&track, &params, true);
+    *cost += best.cost;
+    if best.race.phase() != Phase::Finished {
+        return Checked::Failed(Failure::PerfectFailed);
+    }
+    let perfect_left = *best.race.margins().last().unwrap();
+    let human_ticks = cal.finishes[cal.finishes.len() / 2];
+    let gap = (human_ticks as f64 - best.race.tick() as f64) / best.race.tick() as f64;
+    if strict {
+        if !(PERFECT_LEFT.0..=PERFECT_LEFT.1).contains(&perfect_left) {
+            return Checked::Failed(Failure::PerfectBand(perfect_left));
+        }
+        if !(SKILL_GAP.0..=SKILL_GAP.1).contains(&gap) {
+            return Checked::Failed(Failure::SkillGap(gap));
+        }
+    }
+
+    // 3. Drift-required corners.
+    let mut drift = Vec::new();
+    if strict {
+        let grip = perfect_run(&track, &params, false);
+        *cost += grip.cost;
+        drift = drift_checks(&track, &best, &grip, drift_repairs);
+        if let Some(weak) = drift.iter().find(|d| !d.grip_failed && d.loss < DRIFT_LOSS) {
+            return Checked::WeakDrift(weak.start);
+        }
+    }
+
+    // 4. Floor, on every reachable loadout.
+    let mut worst_margin = u32::MAX;
+    let mut fewest = effort.verify;
+    for &l in loadouts {
+        let p = l.params();
+        let plan = HumanPlan::new(&track, &p);
+        let mut passes = 0;
+        let mut short = vec![0u32; track.checkpoints().len()];
+        for trial in 0..effort.verify {
+            let mut race = Race::new(track.clone(), p);
+            drive(
+                &mut race,
+                &mut HumanBot::new(plan.clone(), substream(seed, VERIFY_TAG + trial)),
+            );
+            *cost += race.tick() as u64;
+            worst_margin = worst_margin.min(race.min_margin());
+            if race.phase() == Phase::Finished && race.min_margin() >= margin {
+                passes += 1;
+            } else {
+                let k = race
+                    .margins()
+                    .iter()
+                    .position(|&m| m < margin)
+                    .unwrap_or(race.margins().len());
+                let last = short.len() - 1;
+                short[k.min(last)] += 1;
+            }
+            if trial + 1 - passes > effort.verify - effort.passes {
+                break;
+            }
+        }
+        fewest = fewest.min(passes);
+        if passes < effort.passes {
+            let section = (0..short.len())
+                .max_by_key(|&k| (short[k], usize::MAX - k))
+                .unwrap();
+            return Checked::Failed(Failure::Margins { passes, section });
+        }
+    }
+
+    Checked::Passed(
+        track,
+        Report {
+            calibrated_on: calib_on,
+            loadouts: loadouts.len(),
+            perfect_left,
+            perfect_ticks: best.race.tick(),
+            human_ticks,
+            skill_gap: gap,
+            worst_margin,
+            fewest_passes: fewest,
+            drift,
+            cost: *cost,
+        },
+    )
 }
 
 /// The two-bot test on every drift-required corner: time from the corner's
