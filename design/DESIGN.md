@@ -276,6 +276,44 @@ Decided, not built:
 - **Devices**: Android export with Salt Line's stripped templates and the
   `device_power` addon; determinism digests on devices.
 
+### 5.1 Biomes *(built, October 2026)*
+
+The five tracks of a run look distinct: **MEADOW, COAST, ALPINE, DESERT
+DUSK, NIGHT CITY** (`racer_sim::biome::Biome`), a day on the road from a
+morning meadow to a city at night.
+
+- **Presentation only.** No track, track digest, layout digest, proof
+  stamp, state hash or replay reads a biome; generation draws no RNG for
+  it. No `SIM_EPOCH` bump; golden runs, batch numbers and the
+  determinism digest are unchanged.
+- **Chosen by track index** for generated tracks (`Biome::of_track`:
+  track 1 MEADOW, 2 COAST, 3 ALPINE, 4 DESERT DUSK, 5 NIGHT CITY); both
+  roads of a fork share it, so the fork cards name it once per card and
+  DEMO shows every biome in a run. A layout carries its own (§9.5); a fork
+  keeps its track's; the editor's BIOME item cycles it.
+- **Palette per biome.** The canvas holds RGBA bytes and paints indices
+  through a 16-entry table it holds (`Canvas::set_palette`), set by the
+  road view each frame; menus and the editor use the meadow's. Each biome
+  is a full 16-colour palette with the same roles: only the scenery
+  indices (grass ×2, sky ×2, hills, brown) change; ink, tarmac, white,
+  red ×2, gravel, ice, water and yellow are fixed, so the HUD, pad and
+  text are byte for byte the same and every frame passes the palette-only
+  check against its own table. Tests: sixteen distinct colours per
+  biome, WCAG contrast on ink (text ≥ 4.5, red and grey ≥ 3), every road
+  surface and kerb ≥ 40 RGB units from the verges, rocks from tarmac.
+- **Scenery** (`scenery.rs`): a far and a near silhouette layer from
+  integer height functions (the meadow's hills; a sea with glints, a
+  headland and dunes; peaks with a ragged snow line and shaded faces over
+  a pine saw edge; mesas with a lit rim over dunes; a skyline of lit
+  windows and masts over hedges), clouds in daylight only, stars and a
+  moon at night, a banded sun setting behind the mesas. One or two height
+  calls per column per layer: the raster costs what the meadow's did.
+- **Roadside**: the decor trees become the biome's flora (palms, pines,
+  cacti; street lights in a staggered row every 48 m at night), and the
+  marker posts are painted as snow poles (ALPINE) or bollards (NIGHT).
+  Same sizes; collision is the sim's and unchanged. Gravel, ice and
+  puddles keep their fixed colours everywhere.
+
 ## 6. Architecture
 
 ```
@@ -511,8 +549,13 @@ Two prefixes, one format (`layout/code.rs`). **`RL`** is the share code
 and always carries a proof; **`RD`** is a draft code, never proven, for
 files, the tools and (Phase 2) the editor's clipboard. Only `RL` codes are
 offered for sharing, so a shared code always races timed. After the
-prefix: Crockford base32 of a format byte (`LAYOUT_FORMAT` = 1), a
+prefix: Crockford base32 of a format byte (1, or `LAYOUT_FORMAT` = 2), a
 bit-packed body and a CRC-16 (Salt Line's codec, `codec.rs`, unchanged).
+**Format 2** (biomes, §5.1) is format 1's body and three bits of biome;
+a MEADOW layout is still written as format 1, so every code made before
+biomes is byte for byte the same layout and reads as a meadow, and
+format 2 refuses a meadow (one spelling per layout). The biome is not in
+the digest or the stamp: repainting keeps the proof and the ghosts.
 The body:
 
 - the curve and pitch channels: the first value, then first or second
@@ -574,12 +617,12 @@ a warning on the console.
 `layout/bundled.rs`: four proven share codes compiled in, easiest first,
 each a fork lightly tuned by hand, with its origin and tuning beside it:
 
-| Course | Origin | Tuning |
-|---|---|---|
-| FIRST LIGHT | seed 3, track 1 | a puddle after the first gate |
-| RIDGE RUN | seed 5, track 3 (hard side) | none |
-| GRAVEL PASS | seed 7, track 4 (easy side) | gravel over the drift corner |
-| LONG DUSK | seed 8, track 5 (easy side) | one traffic car fewer |
+| Course | Origin | Tuning | Biome |
+|---|---|---|---|
+| FIRST LIGHT | seed 3, track 1 | a puddle after the first gate | MEADOW |
+| RIDGE RUN | seed 5, track 3 (hard side) | none | ALPINE |
+| GRAVEL PASS | seed 7, track 4 (easy side) | gravel over the drift corner | DESERT DUSK |
+| LONG DUSK | seed 8, track 5 (easy side) | one traffic car fewer | NIGHT CITY |
 
 Tests decode each, require no problems and a `Proven` stamp, prove each
 again to the timers it carries and to the generated tracks' bands, and (in

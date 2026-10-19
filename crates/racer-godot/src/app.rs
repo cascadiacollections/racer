@@ -56,6 +56,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use racer_sim::biome::Biome;
 use racer_sim::bot::human::{HumanBot, HumanPlan};
 use racer_sim::bot::Driver;
 use racer_sim::ghost::{Ghost, GhostRun, GhostStore, TrackKey};
@@ -181,10 +182,14 @@ pub struct Game {
     pub held: Held,
     /// Decor of the track on screen.
     pub decor: Decor,
+    /// The biome of the track on screen (DESIGN §5.1): the track index's,
+    /// or a custom race's layout's.
+    pub biome: Biome,
     /// The track behind the title screen, and its decor.
     pub title_track: Arc<Track>,
-    /// Decor of the title track.
-    pub title_decor: Decor,
+    /// Decor of the title track, per biome ([`Biome::ALL`] order): the
+    /// title shows each in turn.
+    pub title_decor: Vec<Decor>,
     cache: TrackCache,
     ready: BTreeSet<Key>,
     builder: Box<dyn Build>,
@@ -221,11 +226,22 @@ pub struct Game {
     pub editor: Editor,
 }
 
+/// Seconds the title shows each biome before the next.
+pub const TITLE_BIOME_SECS: f64 = 6.0;
+
 impl Game {
+    /// The biome behind the title screen now: each in turn, from the meadow.
+    pub fn title_biome(&self) -> Biome {
+        Biome::ALL[(self.clock / TITLE_BIOME_SECS) as usize % Biome::ALL.len()]
+    }
+
     /// A game on its title screen, building tracks with `builder`.
     pub fn new(builder: Box<dyn Build>) -> Game {
         let title_track = Arc::new(fixtures::sweep_and_hairpin());
-        let title_decor = Decor::new(&title_track);
+        let title_decor = Biome::ALL
+            .iter()
+            .map(|&b| Decor::new(&title_track, b))
+            .collect();
         Game {
             mode: Mode::Title,
             paused: false,
@@ -238,6 +254,7 @@ impl Game {
             touch: TouchPad::default(),
             held: Held::default(),
             decor: Decor::default(),
+            biome: Biome::Meadow,
             title_track,
             title_decor,
             cache: TrackCache::new(),
@@ -770,7 +787,11 @@ impl Game {
         let index = run.index();
         let track = run.race().track().clone();
         self.watch = Some(Watch::new(run.race()));
-        self.decor = Decor::new(&track);
+        self.biome = match &self.custom {
+            Some(c) => c.layout.biome,
+            None => Biome::of_track(index),
+        };
+        self.decor = Decor::new(&track, self.biome);
         self.ghost = match (&self.demo, self.ghosts.get(key)) {
             (None, Some(g)) => GhostRun::new(track.clone(), g),
             _ => None,

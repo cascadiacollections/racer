@@ -20,6 +20,7 @@
 //! [`History`] keeps whole-draft snapshots ([`UNDO_DEPTH`] of them); a run
 //! of presses of the same edit on the same run is one step.
 
+use racer_sim::biome::Biome;
 use racer_sim::dmath;
 use racer_sim::layout::{
     Layout, AUTHORED_FLAGS, CURVE_MAX, HALF_WIDTH_RANGE, MAX_GATES, MAX_OBJECTS, MAX_SEGMENTS,
@@ -121,6 +122,9 @@ pub enum Edit {
     Length { run: usize, steps: i32 },
     /// Rename the layout.
     Name(String),
+    /// Paint the layout in another biome (DESIGN §5.1): scenery only, so
+    /// the proof stays.
+    Biome(Biome),
 }
 
 impl Edit {
@@ -144,7 +148,7 @@ impl Edit {
             | Edit::Add { run }
             | Edit::Delete { run }
             | Edit::Length { run, .. } => Some(run),
-            Edit::Name(_) => None,
+            Edit::Name(_) | Edit::Biome(_) => None,
         }
     }
 
@@ -158,6 +162,7 @@ impl Edit {
             Edit::MoveGate { run, .. } => Some((3, run)),
             Edit::Length { run, .. } => Some((4, run)),
             Edit::Name(_) => Some((5, 0)),
+            Edit::Biome(_) => Some((6, 0)),
             _ => None,
         }
     }
@@ -374,6 +379,13 @@ impl Draft {
                     return false;
                 }
                 self.layout.name = n.clone();
+                return true;
+            }
+            Edit::Biome(b) => {
+                if *b == self.layout.biome {
+                    return false;
+                }
+                self.layout.biome = *b;
                 return true;
             }
             &Edit::Bend { run, steps } => {

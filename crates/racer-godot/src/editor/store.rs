@@ -376,7 +376,7 @@ mod tests {
     /// `l`'s code as a later `LAYOUT_FORMAT` would frame it.
     fn newer_code(l: &Layout) -> String {
         let mut bytes = l.to_bytes().unwrap();
-        bytes[0] += 1;
+        bytes[0] = racer_sim::layout::LAYOUT_FORMAT + 1;
         racer_sim::codec::frame("RL", bytes)
     }
 

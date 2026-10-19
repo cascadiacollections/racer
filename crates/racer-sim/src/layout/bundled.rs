@@ -14,6 +14,12 @@
 //! test proves every course again and requires the timers it carries
 //! (or, after a bump, the course re-proven: `layout prove` with the code).
 //!
+//! Each course keeps the biome its fork had (DESIGN §5.1): FIRST LIGHT a
+//! meadow (its code is the format-1 code it always was), RIDGE RUN alpine,
+//! GRAVEL PASS desert dusk, LONG DUSK night city. Adding the biomes changed
+//! only the last three codes' format byte and tail: their stamps and
+//! timers are the same.
+//!
 //! To remake the codes after changing a recipe:
 //! `cargo test -p racer-sim --lib layout::bundled -- --ignored --nocapture`.
 
@@ -52,7 +58,7 @@ pub const COURSES: [Course; 4] = [
     },
     Course {
         code: concat!(
-            "RL04M7JH40RR948N1QH7ZZX6BJ5G5GBMHC864K4H0RJW7TCQ4B0B0QZX8EGT10MT",
+            "RL08M7JH40RR948N1QH7ZZX6BJ5G5GBMHC864K4H0RJW7TCQ4B0B0QZX8EGT10MT",
             "KN2ZZZZZ006D9TKA5238EG9ZZZZW01PG60C049H0Z8K28G0RP5S203300Z030602",
             "4RGF8001018G87ZW210M810000R52G80QZR80G8M84P432BGEH5S2R2GN4B0B07T",
             "0P432BG09019GZZMRD2090QZZMSQ5RC4B3C2ZT8V2R435SWSZHFX14S3YHZN4S4F",
@@ -61,14 +67,14 @@ pub const COURSES: [Course; 4] = [
             "0CCC8C448400101GGGHJHHKJKKKMACX6WKTFZZZZ01F202B48GY82D06982Q0HP6",
             "M16Q0BN043C0MW0K80M40HM2404700AY8J4H4928J400AY0928J4H49280NR015G",
             "KKKKG2M0348J4H4928J4H4928J4H800AD3G1G40680014402K01J201VJ0C2009D",
-            "C0V80CGR02YQ00YYG0F7R07G53NB8TA85MHR",
+            "C0V80CGR02YQ00YYG0F7R07G53NB8TA94AB8",
         ),
         origin: "fork:0x0000000000000005:2:1:e1",
         tuning: "none: the generated road as it is",
     },
     Course {
         code: concat!(
-            "RL04MRP68G2M8BJ3R14JW9ZZZ8JWHC1C0R0P432AJGGC9E1YH5S2R3G7T7WS349Y",
+            "RL08MRP68G2M8BJ3R14JW9ZZZ8JWHC1C0R0P432AJGGC9E1YH5S2R3G7T7WS349Y",
             "DZ4824Z6ZJ44G7S7WRY08G261ZZR6180A20ZZZZY00K13J68C76CWRFZZZZGSSK6",
             "7334E85ZZZZW01NK768J0WGBW4E8G49SGZZZR4K3G0GJ0E04GG07490401S61ZG9",
             "6701140X218W0G0FZW008C2H0ZZZZC1Z007WS349Z607W108KYC0FR21G7W00ZK4",
@@ -77,14 +83,14 @@ pub const COURSES: [Course; 4] = [
             "GGHHK2CA8MMKB9B9F1YQZZZFZVFZ5X71TEK1MTAA884A0CSMMNNPVDJXQDSFDZW7",
             "ZXFZZZZ00WE02B4Y3S09C0JD0F40AJ44Q06P83SC0QR0KM0HC0K8243W02QG4H49",
             "28J400AY4928J4H4903G004P0EEEE04B0340J4H4928G01BRH4928J4H4905001B",
-            "RJ000KQQ02X80CGG04YJ1CG02AC05A01J0G05GA00GD806AM03AYJHP4BB000X0",
+            "RJ000KQQ02X80CGG04YJ1CG02AC05A01J0G05GA00GD806AM03AYJHP4BB0SRPY",
         ),
         origin: "fork:0x0000000000000007:3:0:e1",
         tuning: "gravel laid over the drift corner",
     },
     Course {
         code: concat!(
-            "RL04NVJB738T83A4HBJ5ZZZ9HY8WHCA3G7R1FJGZ0E0M5HS3WGZZTCF4DG0R3R1E",
+            "RL08NVJB738T83A4HBJ5ZZZ9HY8WHCA3G7R1FJGZ0E0M5HS3WGZZTCF4DG0R3R1E",
             "23R3006RWHR3006RY8FDHWHP030F05ZZYJ3Z0FG21HY8ZS1ZZX67Y8Z4623W1ZG2",
             "ZXP7V3CD1YGB91YGT3CFP3M0X10S3P1T4ERJC1R3J4K0EG203M434ER0084J8FTC",
             "29420863D0QGG9P31010J91ZDG94G81C90G8004EW000212FZ11YGY0G4HWHYRFP",
@@ -94,7 +100,7 @@ pub const COURSES: [Course; 4] = [
             "VP5VG105041C0S80Q40JM0HC3P08G034660049G4H4928J4H4800NW8J4H4928J4",
             "G23H4928J4H4928J4H4928J4H4928J4H40GW928J4H4928G01BR14928J04G0349",
             "SSSSRG005N880J2034401SV04A0340026A1K01J300BTW017CG0E28066XEGNY28",
-            "00P3C0",
+            "20MMH0",
         ),
         origin: "fork:0x0000000000000008:4:0:e1",
         tuning: "the last traffic car taken off",
@@ -113,6 +119,7 @@ pub fn layouts() -> Vec<Layout> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::biome::Biome;
     use crate::layout::{fork, Provenance, Standing, Verified};
     use crate::track::{flags, Surface};
 
@@ -160,6 +167,13 @@ mod tests {
         assert_eq!(
             names,
             ["FIRST LIGHT", "RIDGE RUN", "GRAVEL PASS", "LONG DUSK"]
+        );
+        // Each keeps its fork's scenery (the track index's biome); only
+        // the meadow is still a format-1 code.
+        let biomes: Vec<Biome> = layouts().into_iter().map(|l| l.biome).collect();
+        assert_eq!(
+            biomes,
+            [Biome::Meadow, Biome::Alpine, Biome::Desert, Biome::Night]
         );
     }
 

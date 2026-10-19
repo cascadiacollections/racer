@@ -10,6 +10,8 @@
 //! Every pixel is a palette index; the shapes only ever pick from
 //! [`crate::palette`].
 
+use racer_sim::biome::Biome;
+
 use crate::palette::*;
 use crate::raster::Sprite;
 
@@ -114,6 +116,131 @@ fn tree(u: f64, v: f64, _w: i32, _h: i32) -> u8 {
         BROWN
     } else {
         C
+    }
+}
+
+/// A palm (COAST): a trunk leaning right, ringed, under a crown of fronds
+/// drooping either way.
+fn palm(u: f64, v: f64, _w: i32, _h: i32) -> u8 {
+    // The trunk curves: its centre moves right as it rises.
+    let centre = 0.5 + 0.12 * (1.0 - v) * (1.0 - v);
+    if v > 0.22 && (u - centre).abs() < 0.06 {
+        return if ((v * 40.0) as i32) % 3 == 0 {
+            GRAVEL
+        } else {
+            BROWN
+        };
+    }
+    let (cx, cy) = (0.57, 0.2);
+    let (dx, dy) = (u - cx, v - cy);
+    // Fronds: arcs that rise from the crown and droop, two either side,
+    // thinning towards their tips.
+    for (k, droop, lift) in [
+        (1.0, 2.2, 0.5),
+        (-1.0, 2.2, 0.5),
+        (1.0, 1.0, 0.15),
+        (-1.0, 1.0, 0.15),
+    ] {
+        let x = dx * k;
+        if (0.0..0.45).contains(&x) {
+            let y = droop * x * x - lift * x;
+            if (dy - y).abs() < 0.05 - x * 0.07 {
+                return HILLS;
+            }
+        }
+    }
+    if dx * dx + dy * dy < 0.004 {
+        return BROWN;
+    }
+    C
+}
+
+/// A saguaro (DESERT DUSK): a ribbed column with an arm either side.
+fn cactus(u: f64, v: f64, _w: i32, _h: i32) -> u8 {
+    let body = (u - 0.5).abs() < 0.12 && v > 0.04;
+    // Left arm: out at v 0.55, up to v 0.3; right arm: out at 0.45, up to 0.2.
+    let left = (v > 0.5 && v < 0.6 && u > 0.18 && u < 0.4)
+        || ((u - 0.22).abs() < 0.07 && v > 0.3 && v < 0.6);
+    let right = (v > 0.4 && v < 0.5 && u > 0.6 && u < 0.82)
+        || ((u - 0.78).abs() < 0.07 && v > 0.2 && v < 0.5);
+    if body || left || right {
+        // A rib of shade down the body's right side.
+        if body && u > 0.54 && u < 0.58 {
+            GRASS_DK
+        } else {
+            HILLS
+        }
+    } else {
+        C
+    }
+}
+
+/// A pine (ALPINE): three tiers of branches, snow on each tier's upper
+/// edge, a short trunk.
+fn pine(u: f64, v: f64, _w: i32, _h: i32) -> u8 {
+    let dx = (u - 0.5).abs();
+    if v > 0.85 {
+        return if dx < 0.07 { BROWN } else { C };
+    }
+    // Each tier is a triangle; the lower tiers are wider.
+    for (top, bottom, half) in [(0.0, 0.4, 0.26), (0.22, 0.64, 0.38), (0.45, 0.87, 0.5)] {
+        if v >= top && v < bottom {
+            let reach = half * (v - top) / (bottom - top);
+            if dx < reach {
+                // Snow along the tier's sloping edge.
+                return if reach - dx < 0.07 && v < bottom - 0.08 {
+                    WHITE
+                } else {
+                    HILLS
+                };
+            }
+        }
+    }
+    C
+}
+
+/// A street light (NIGHT CITY): a grey post with an arm out to the left
+/// (over the road when it stands right of it; mirrored on the left) and a
+/// lit lamp.
+fn lamp(u: f64, v: f64, _w: i32, _h: i32) -> u8 {
+    let post = (u - 0.85).abs() < 0.06;
+    if post && v > 0.92 {
+        return ASPHALT_DK;
+    }
+    if post && v > 0.06 {
+        return ASPHALT_LT;
+    }
+    if v > 0.04 && v < 0.09 && u > 0.2 && u < 0.9 {
+        return ASPHALT_LT;
+    }
+    if (0.09..0.15).contains(&v) && u > 0.12 && u < 0.38 {
+        return if v < 0.12 && u > 0.18 && u < 0.32 {
+            WHITE
+        } else {
+            YELLOW
+        };
+    }
+    C
+}
+
+/// A snow pole (ALPINE's marker post): red and white bands.
+fn snow_post(_u: f64, v: f64, _w: i32, _h: i32) -> u8 {
+    if ((v * 5.0) as i32) % 2 == 0 {
+        RED
+    } else {
+        WHITE
+    }
+}
+
+/// A city bollard (NIGHT CITY's marker post): white, with a yellow
+/// reflector at the top.
+fn city_post(_u: f64, v: f64, _w: i32, _h: i32) -> u8 {
+    if v < 0.22 {
+        YELLOW
+    } else if v < 0.3 {
+        INK
+    } else {
+        WHITE
     }
 }
 
@@ -245,8 +372,20 @@ pub struct Art {
     pub post: Steps,
     /// Boulders.
     pub rock: Steps,
-    /// Roadside trees (decor).
+    /// Roadside trees (decor): the meadow's flora.
     pub tree: Steps,
+    /// COAST's palms.
+    pub palm: Steps,
+    /// DESERT DUSK's cacti.
+    pub cactus: Steps,
+    /// ALPINE's pines.
+    pub pine: Steps,
+    /// NIGHT CITY's street lights.
+    pub lamp: Steps,
+    /// ALPINE's marker posts.
+    pub snow_post: Steps,
+    /// NIGHT CITY's marker posts.
+    pub city_post: Steps,
     /// Bend-warning boards; pointing right, mirrored for left.
     pub chevron: Steps,
     /// Traffic cars from behind.
@@ -269,6 +408,12 @@ impl Art {
             post: Steps::new(0.4, 1.4, post),
             rock: Steps::new(2.2, 1.3, rock),
             tree: Steps::new(4.0, 7.0, tree),
+            palm: Steps::new(4.0, 8.0, palm),
+            cactus: Steps::new(2.4, 5.0, cactus),
+            pine: Steps::new(3.4, 8.0, pine),
+            lamp: Steps::new(3.0, 8.0, lamp),
+            snow_post: Steps::new(0.4, 1.4, snow_post),
+            city_post: Steps::new(0.4, 1.4, city_post),
             chevron: Steps::new(1.6, 2.4, chevron),
             traffic: Steps::new(2.0, 1.5, |u, v, w, _h| car(u, v, w, TRAFFIC, 0.0, 0)),
             ghost: {
@@ -283,6 +428,31 @@ impl Art {
                 frame(-4.0, 1),
                 frame(4.0, -1),
             ],
+        }
+    }
+}
+
+impl Art {
+    /// What stands beside a road in biome `b`: the decor that was the
+    /// meadow's trees.
+    pub fn flora(&self, b: Biome) -> &Steps {
+        match b {
+            Biome::Meadow => &self.tree,
+            Biome::Coast => &self.palm,
+            Biome::Alpine => &self.pine,
+            Biome::Desert => &self.cactus,
+            Biome::Night => &self.lamp,
+        }
+    }
+
+    /// The marker posts (the sim's `ObjectKind::Post`) in biome `b`. Every
+    /// one is the same size: a post's footprint is the sim's, and only its
+    /// paint changes.
+    pub fn post_for(&self, b: Biome) -> &Steps {
+        match b {
+            Biome::Alpine => &self.snow_post,
+            Biome::Night => &self.city_post,
+            _ => &self.post,
         }
     }
 }
@@ -319,6 +489,12 @@ mod tests {
             &art.post,
             &art.rock,
             &art.tree,
+            &art.palm,
+            &art.cactus,
+            &art.pine,
+            &art.lamp,
+            &art.snow_post,
+            &art.city_post,
             &art.chevron,
             &art.traffic,
             &art.ghost,
@@ -333,6 +509,26 @@ mod tests {
             assert_eq!((f.w, f.h), (CAR_W, CAR_H));
             assert!(f.px.iter().all(|&c| c == Sprite::CLEAR || c < 16));
         }
+    }
+
+    #[test]
+    fn every_biome_has_its_flora_and_posts_the_size_of_the_meadows() {
+        let art = Art::new();
+        for b in Biome::ALL {
+            assert_eq!(art.post_for(b).size_m, art.post.size_m, "{b:?}");
+            let f = art.flora(b);
+            assert!(f.size_m.1 >= 5.0, "{b:?} stands tall");
+            if b != Biome::Meadow {
+                assert_ne!(f.sprites, art.tree.sprites, "{b:?}");
+            }
+        }
+        // A street light's lamp hangs out over the road: lit pixels left
+        // of its post.
+        let big = art.lamp.sprites.last().unwrap();
+        let lit: Vec<i32> = (0..big.w)
+            .filter(|&x| (0..big.h).any(|y| big.at(x, y) == YELLOW))
+            .collect();
+        assert!(!lit.is_empty() && lit.iter().all(|&x| x < big.w / 2));
     }
 
     #[test]

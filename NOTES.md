@@ -445,3 +445,44 @@ file format 2).
   a code at a line starting `origin` or `#`, and tries shorter cuts at each
   space or line break so words after a code are not swallowed. A prefix
   inside a word (`HARD`, `WORLD`) does not start a candidate.
+
+## Biomes (2026-10-18)
+
+DESIGN §5.1. MEADOW, COAST, ALPINE, DESERT DUSK, NIGHT CITY: track index
+order, so every run (and DEMO) shows all five, meadow first.
+
+- **Nothing simulated moved.** The biome is a field on `Layout` only, out
+  of `Layout::hash` and the stamp; generation draws nothing for it. No
+  `SIM_EPOCH` bump; the determinism digest is still `0x4a5c1bcc8fc9fdfb`
+  (200 runs, 432,547 inputs, 0 divergences); golden runs pass unchanged.
+- **Codes.** A meadow writes format 1 exactly as before (the pinned draft
+  and FIRST LIGHT are byte for byte the same); other biomes write format
+  2 (+3 bits, at most one more character). RIDGE RUN's pre-biome code is
+  pinned in the tests: it reads as a meadow, still `Proven`; repainted in
+  any biome it keeps its digest, stamp and standing. RIDGE RUN, GRAVEL
+  PASS and LONG DUSK now carry ALPINE, DESERT DUSK and NIGHT CITY (their
+  forks' indices): their codes changed in the format byte and the last
+  few characters only, same timers and stamps, verified by `just layout
+  bundled`.
+- **Palette mechanism.** The buffer is RGBA, not indexed, so the canvas
+  holds the 16-entry table it converts indices through; the road view
+  sets the biome's each frame, everything else the meadow's. Only six
+  scenery indices change per biome, so the HUD strip and pad are pixel
+  for pixel the meadow's (tested).
+- **Raster cost**, desktop (this machine, release, 180x360 racing frame,
+  4000 frames, `raster_bench`): before 223 us; after MEADOW 235, COAST
+  223, ALPINE 247, DESERT DUSK 83, NIGHT CITY 105 us. The clouds are most
+  of a daylight frame (per-pixel ellipse tests on cloud rows, and a Vec per
+  sky row); the new layers cost little. Bounding each cloud row's x range
+  is the obvious win if the Pixel's 0.8 ms needs trimming.
+- **Golden frames.** The seven render goldens (all meadow) are unchanged;
+  `biome_coast`, `biome_alpine`, `biome_desert` and `biome_night` were
+  added (the showcase's run-up, scrolled). Screens: `title` (biome name
+  under the tagline), `fork` (each card names the next road's biome) and
+  `editor_menu` (the BIOME item; the menu is now 11 items, six rows)
+  moved; no other screen did.
+- **Desktop check.** Headless import and a 300-frame run start clean (the
+  known exit-time leak aside); `git diff project.godot` empty, stray
+  `.import` files deleted. Not tried on the Pixel: how the night and the
+  desert read on the phone's panel, and whether the alpine peaks' shaded
+  faces look busy at that size, are the things to look at.

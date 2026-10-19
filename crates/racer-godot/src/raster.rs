@@ -6,10 +6,15 @@
 //! ([`crate::sprites`]) and copied 1:1. The only blending is ordered
 //! dithering between two palette colours ([`Canvas::dither_span`]).
 //!
+//! Drawing takes palette indices; the canvas turns each into RGBA through
+//! its current table ([`Canvas::set_palette`]: the meadow's unless a biome's
+//! is set), so a biome repaints the same indices without the drawing code
+//! knowing.
+//!
 //! Engine-free: the bytes are handed to Godot by `game.rs`.
 
 use crate::font;
-use crate::palette::{rgba, Rgba};
+use crate::palette::{Palette, Rgba, COLOURS};
 
 /// 4x4 Bayer matrix: thresholds 0..16 spread as evenly as possible, so a
 /// blend fraction lights an even scatter of pixels.
@@ -81,6 +86,7 @@ pub struct Canvas {
     /// Height in pixels.
     pub h: i32,
     px: Vec<u8>,
+    pal: Palette,
 }
 
 impl Canvas {
@@ -91,6 +97,7 @@ impl Canvas {
             w,
             h,
             px: vec![0; (w * h * 4) as usize],
+            pal: COLOURS,
         };
         c.fill(crate::palette::INK);
         c
@@ -100,8 +107,29 @@ impl Canvas {
     pub fn resize(&mut self, w: i32, h: i32) {
         let (w, h) = (w.max(1), h.max(1));
         if (w, h) != (self.w, self.h) {
+            let pal = self.pal;
             *self = Canvas::new(w, h);
+            self.pal = pal;
         }
+    }
+
+    /// Paint with `p` from now on: a biome's colours (DESIGN §5.1). What is
+    /// already painted keeps its colours, so a frame sets its palette
+    /// before it draws.
+    pub fn set_palette(&mut self, p: &Palette) {
+        self.pal = *p;
+    }
+
+    /// The colours it paints with.
+    pub fn palette(&self) -> &Palette {
+        &self.pal
+    }
+
+    /// The colour of index `i` in the current palette; an index past the
+    /// last clamps to it rather than panic.
+    #[inline]
+    fn rgba(&self, i: u8) -> Rgba {
+        self.pal[(i as usize).min(15)]
     }
 
     /// The bytes, `w * h * 4`, for the texture upload.
@@ -111,7 +139,7 @@ impl Canvas {
 
     /// Fill everything with palette colour `c`.
     pub fn fill(&mut self, c: u8) {
-        let c = rgba(c);
+        let c = self.rgba(c);
         for p in self.px.as_chunks_mut::<4>().0 {
             p.copy_from_slice(&c);
         }
@@ -122,7 +150,8 @@ impl Canvas {
     pub fn put(&mut self, x: i32, y: i32, c: u8) {
         if x >= 0 && y >= 0 && x < self.w && y < self.h {
             let i = ((y * self.w + x) * 4) as usize;
-            self.px[i..i + 4].copy_from_slice(&rgba(c));
+            let c = self.rgba(c);
+            self.px[i..i + 4].copy_from_slice(&c);
         }
     }
 
@@ -145,7 +174,7 @@ impl Canvas {
         if a >= b {
             return;
         }
-        let c = rgba(c);
+        let c = self.rgba(c);
         let row = (y * self.w) as usize * 4;
         for p in self.px[row + a as usize * 4..row + b as usize * 4]
             .as_chunks_mut::<4>()
@@ -268,13 +297,13 @@ impl Canvas {
         h.finish()
     }
 
-    /// Whether every pixel is a palette colour.
+    /// Whether every pixel is a colour of the current palette.
     pub fn palette_only(&self) -> bool {
         self.px
             .as_chunks::<4>()
             .0
             .iter()
-            .all(|p| crate::palette::index_of(*p).is_some())
+            .all(|p| self.pal.contains(p))
     }
 
     /// The frame as a binary PPM, for eyeballing golden frames.
@@ -291,6 +320,24 @@ impl Canvas {
 mod tests {
     use super::*;
     use crate::palette::*;
+
+    #[test]
+    fn a_palette_repaints_the_same_indices_and_survives_a_resize() {
+        let mut c = Canvas::new(4, 4);
+        c.put(0, 0, GRASS_LT);
+        assert_eq!(c.get(0, 0), COLOURS[GRASS_LT as usize]);
+        c.set_palette(&ALPINE);
+        assert!(!c.palette_only(), "meadow grass is not an alpine colour");
+        c.put(0, 0, GRASS_LT);
+        c.resize(4, 4);
+        assert_eq!(c.get(0, 0), ALPINE[GRASS_LT as usize]);
+        c.fill(INK);
+        c.put(1, 1, GRASS_LT);
+        assert!(c.palette_only());
+        c.resize(8, 8);
+        assert_eq!(c.palette(), &ALPINE);
+        assert_eq!(c.get(0, 0), rgba(INK), "ink is ink in every biome");
+    }
 
     #[test]
     fn spans_clip_and_are_half_open() {

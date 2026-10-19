@@ -9,3 +9,7 @@ crest_over: 0x6930be5b1e8a0f8e
 hazards: 0x3aeaf174724eb7b4
 drift_corner_signed: 0x36558f3c87628f4c
 ghost_ahead: 0x58a73c2653974ce2
+biome_coast: 0x00bdd67a29ef7caa
+biome_alpine: 0x42eb16f45a6671ae
+biome_desert: 0xb43707dbe3266ae6
+biome_night: 0x737dc25898b1a666

@@ -38,6 +38,7 @@ pub mod code;
 use std::fmt;
 use std::sync::Arc;
 
+use crate::biome::Biome;
 use crate::gen::difficulty::{PERFECT_LEFT, TARGET_SEGS};
 use crate::hash::Hasher;
 use crate::race::MAX_RACE_TICKS;
@@ -49,7 +50,8 @@ use crate::upgrade::Loadout;
 use crate::TICKS_PER_SEC;
 
 pub use code::{
-    CodeError, CODE_PREFIXES, DRAFT_PREFIX, LAYOUT_FORMAT, MAX_CODE_CHARS, SHARE_PREFIX,
+    CodeError, CODE_PREFIXES, DRAFT_PREFIX, LAYOUT_FORMAT, LAYOUT_FORMAT_PLAIN, MAX_CODE_CHARS,
+    SHARE_PREFIX,
 };
 
 /// The most segments a layout holds: 8 km, over eight minutes of road.
@@ -188,6 +190,10 @@ pub struct Layout {
     pub traffic: Vec<TrafficCar>,
     /// The timers and stamp a proof set; `None` until proven.
     pub proof: Option<Proof>,
+    /// The scenery it is painted with (DESIGN §5.1). Presentation only:
+    /// not part of the digest or the stamp, so choosing one keeps the
+    /// layout's ghosts and its proof.
+    pub biome: Biome,
 }
 
 /// What [`Layout::prove`] certifies: the checkpoint timers, and a stamp
@@ -368,12 +374,13 @@ impl Layout {
             objects: track.objects().to_vec(),
             traffic: track.traffic().to_vec(),
             proof: None,
+            biome: Biome::Meadow,
         }
     }
 
     /// The digest of the road: segments, gates, objects and traffic. Not
-    /// the name and not the proof, so a renamed or re-proven layout is the
-    /// same road (and keeps its ghosts, DESIGN §9.6).
+    /// the name, the biome or the proof, so a renamed, repainted or
+    /// re-proven layout is the same road (and keeps its ghosts, DESIGN §9.6).
     pub fn hash(&self) -> u64 {
         let mut h = Hasher::new();
         h.write_u64(HASH_TAG);
@@ -709,11 +716,15 @@ pub struct Fork {
 /// proven by the solver as a run would meet it, written down as a layout.
 /// The layout is the road exactly (a layout's track equals the generated
 /// one bar its timers); its timers are not kept, because they were set for
-/// the loadouts a run reaches that track with, not a custom race's.
+/// the loadouts a run reaches that track with, not a custom race's. It
+/// keeps the scenery the run painted it with ([`Biome::of_track`]).
 pub fn fork(run_seed: u64, index: u32, branch: u8) -> Fork {
     let built = build(run_seed, index, branch, Effort::default());
     Fork {
-        layout: Layout::from_track(&built.track),
+        layout: Layout {
+            biome: Biome::of_track(index),
+            ..Layout::from_track(&built.track)
+        },
         provenance: Provenance {
             run_seed,
             index,
