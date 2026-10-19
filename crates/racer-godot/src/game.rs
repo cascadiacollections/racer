@@ -175,6 +175,7 @@ impl INode2D for Racer {
             godot_print!("racer: {} ghosts loaded", self.g.ghosts().len());
         }
         self.setup_audio();
+        self.dev_flags();
         godot_print!(
             "racer: sim epoch {} ({:#018x})",
             racer_sim::SIM_EPOCH,
@@ -368,6 +369,35 @@ impl Racer {
 }
 
 impl Racer {
+    /// Act on the developer flags (`cli.rs`): `--racer-layout` starts a
+    /// custom race on a code or a layout file. The layout is verified
+    /// (proven again, tens of milliseconds) before it races timed.
+    fn dev_flags(&mut self) {
+        let os = Os::singleton();
+        let args: Vec<String> = os
+            .get_cmdline_args()
+            .as_slice()
+            .iter()
+            .chain(os.get_cmdline_user_args().as_slice())
+            .map(|s| s.to_string())
+            .collect();
+        let dev = crate::cli::DevArgs::parse(&args);
+        let Some(arg) = dev.layout else { return };
+        let path = ProjectSettings::singleton()
+            .globalize_path(&arg)
+            .to_string();
+        let text = std::fs::read_to_string(&path).unwrap_or(arg);
+        match crate::custom::load(&text, true) {
+            Ok((c, note)) => {
+                godot_print!("racer: --racer-layout: {note}");
+                self.g.start_custom(c);
+            }
+            Err(why) => {
+                godot_warn!("racer: --racer-layout: {why}");
+            }
+        }
+    }
+
     /// A player for `res://art/audio/<file>.wav`, a child of the node, at
     /// `db`. Imported loops loop by themselves: the generator writes their
     /// loop points into the file (tools/gen_audio.py).

@@ -112,6 +112,10 @@ pub struct RunState {
     index: u32,
     branch: u8,
     loadout: Loadout,
+    /// Tracks in this run: [`TRACKS`], or 1 for a custom race
+    /// ([`RunState::single`]). Not hashed: it follows from how the run
+    /// began.
+    tracks: u32,
     phase: RunPhase,
     race: Race,
     results: Vec<TrackResult>,
@@ -128,8 +132,27 @@ impl RunState {
             index: 0,
             branch: 0,
             loadout: Loadout::BASE,
+            tracks: TRACKS,
             phase: RunPhase::Racing,
             race,
+            results: Vec::new(),
+            past: Vec::new(),
+        }
+    }
+
+    /// A run of one track, `track`, driven with `loadout`: a custom race on
+    /// a layout (DESIGN §9). Finishing it wins the run; there is no fork.
+    /// `key` stands in for the run seed (a layout's digest), so a ghost or
+    /// a state hash can tell custom races apart.
+    pub fn single(key: u64, track: Arc<Track>, loadout: Loadout) -> Self {
+        RunState {
+            run_seed: key,
+            index: 0,
+            branch: 0,
+            loadout,
+            tracks: 1,
+            phase: RunPhase::Racing,
+            race: Race::new(track, loadout.params()),
             results: Vec::new(),
             past: Vec::new(),
         }
@@ -153,7 +176,7 @@ impl RunState {
                 self.past.extend_from_slice(self.race.log());
                 self.phase = if end == Phase::TimeUp {
                     RunPhase::Lost
-                } else if self.index + 1 == TRACKS {
+                } else if self.index + 1 >= self.tracks {
                     RunPhase::Won
                 } else {
                     RunPhase::Forking
@@ -170,7 +193,7 @@ impl RunState {
     /// Take fork `branch` (0 or 1) onto the next track. Returns false, and
     /// changes nothing, unless the run is forking and the branch exists.
     pub fn fork(&mut self, branch: u8, tracks: &mut impl Tracks) -> bool {
-        if self.phase != RunPhase::Forking || branch > 1 {
+        if self.phase != RunPhase::Forking || branch > 1 || self.index + 1 >= self.tracks {
             return false;
         }
         self.index += 1;
@@ -201,6 +224,12 @@ impl RunState {
     #[inline]
     pub fn branch(&self) -> u8 {
         self.branch
+    }
+
+    /// Tracks in this run: [`TRACKS`], or 1 for a custom race.
+    #[inline]
+    pub fn tracks(&self) -> u32 {
+        self.tracks
     }
 
     /// Upgrades held.

@@ -361,3 +361,44 @@ each other with `adb install -r` as long as the key stays the same.
   few pixels; if that reads too faintly on the phone, an outline or a
   marker over it is the next step. Golden frame `ghost_ahead` added; the
   `time_up` screen digest moved for the new button; no other golden changed.
+
+## Layouts, Phase 1 (2026-10-18)
+
+DESIGN §9. Data model, fork from seed, prove/stamp/verify, `RL`/`RD`
+codes, four bundled courses, `just layout …`, `--racer-layout`. No editor
+UI.
+
+- **Nothing generated moved.** `solver::validate`'s body became
+  `solver::check` (one pass, returning `WeakDrift` for the ladder to
+  tighten) so layouts prove with the same code; the ladder calls it exactly
+  as before. Golden runs pass unchanged, no `SIM_EPOCH` bump, and the
+  determinism digest is still `0x4a5c1bcc8fc9fdfb` (200 runs, 432,547
+  inputs, 0 divergences). `RunState` gained an unhashed `tracks` count
+  (`TRACKS`, or 1 for `RunState::single`); no golden frame moved.
+- **Custom-race rules**: base loadout, 1.5 s margin, default effort,
+  strict bands, no repairs. `just layout survey --seeds 50` (the batch's
+  seed schedule, 450 forks): 50/50, 96/100, 88/100, 89/100, 71/100 prove by
+  track index (87% overall). Failures: margins 30, skill gap 17, perfect
+  band 7, crash-prone 2. A 2.0 s margin would fail more of the hard tracks;
+  1.0 s would let a layout's timer bite less than a run's middle track.
+- **Prove cost**, this machine (Ryzen AI 7 PRO 350), release, one prove at
+  a time: 56–81 ms for eleven forks across all five indices (about 0.35M
+  ticks each); the bundled courses verify in 59–77 ms. With 16 proves in
+  parallel the median is 108 ms (p95 138). Cheap enough that the dev flag
+  re-proves every code it loads; on a phone it wants the builder thread.
+- **Code sizes**: draft codes median 553 characters (p95 678, max 788),
+  share codes median 572 (max 814) over the 450 forks; the bundled courses
+  548–646; the pinned hand-made 240-segment layout 95. Most of a code is
+  the curve and pitch channels (smoothstep bends and bump hills: second
+  differences win on hills, first on bends, chosen per channel).
+- **Bundled courses** (forks of small seeds, chosen for variety and a pass
+  under the custom rules, then tuned): FIRST LIGHT (3/0/0, puddle), RIDGE
+  RUN (5/2/1), GRAVEL PASS (7/3/0, gravel on the drift corner), LONG DUSK
+  (8/4/0, one car fewer); perfect bot leaves 10.0, 9.6, 8.8 and 8.4 s.
+  Remake with the ignored `layout::bundled::tests::print_codes`.
+- `--racer-layout` checked headless on desktop: a share code and a layout
+  file start the race (`proven: timed (verified)` / `unproven: free drive`),
+  garbage leaves the title with a warning. The import step left
+  `project.godot` unchanged (its stray `.import` files for docs/site images
+  were deleted, not committed).
+- `_typos.toml` ignores quoted base32 runs of 30+ characters (the codes).

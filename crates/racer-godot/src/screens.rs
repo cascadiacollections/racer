@@ -64,6 +64,7 @@ fn title(g: &Game, c: &mut Canvas, art: &Art, l: &Layout) -> Vec<Button> {
         car,
         tick: (g.clock * 120.0) as u32,
         timer: 0,
+        timed: true,
         next_gate: t.checkpoints().len(),
         input: Input::NEUTRAL,
         index: 0,
@@ -112,7 +113,7 @@ fn racing(g: &Game, c: &mut Canvas, art: &Art, l: &Layout) -> Vec<Button> {
     let Some(run) = &g.run else {
         return Vec::new();
     };
-    let mut scene = RaceScene::of(run.race(), run.index(), TRACKS, g.bg.round() as i32);
+    let mut scene = RaceScene::of(run.race(), run.index(), run.tracks(), g.bg.round() as i32);
     scene.ghost = g.ghost().map(|gh| (gh.car().z, gh.car().x));
     scene.ghost_note = g.ghost_note();
     let held = if g.paused { Held::default() } else { g.held };
@@ -338,7 +339,12 @@ fn results(g: &Game, c: &mut Canvas, l: &Layout) -> Vec<Button> {
         c,
         l.w / 2,
         16,
-        if won { "RUN CLEAR" } else { "TIME UP" },
+        match (won, &g.custom) {
+            (true, None) => "RUN CLEAR",
+            (true, Some(c)) if c.timed => "COURSE CLEAR",
+            (true, Some(_)) => "FINISHED",
+            (false, _) => "TIME UP",
+        },
         if won { YELLOW } else { RED },
         3,
     );
@@ -370,6 +376,15 @@ fn results(g: &Game, c: &mut Canvas, l: &Layout) -> Vec<Button> {
     }
     c.text(10, 118, &format!("TOTAL {}S", secs(total)), YELLOW, 1);
     c.text(10, 130, &run.loadout().describe().to_uppercase(), WHITE, 1);
+    if let Some(cu) = &g.custom {
+        let what = if cu.timed { "PROVEN" } else { "FREE DRIVE" };
+        let name = if cu.layout.name.is_empty() {
+            "LAYOUT"
+        } else {
+            &cu.layout.name
+        };
+        c.text(10, 142, &format!("{name}  {what}"), ASPHALT_LT, 1);
+    }
     let r = Rect::new(6, l.bottom() - 52, l.w - 12, 46);
     if !g.demo() {
         // The same seed again: the same roads, with this run's best on each
@@ -379,7 +394,11 @@ fn results(g: &Game, c: &mut Canvas, l: &Layout) -> Vec<Button> {
             c,
             &mut out,
             retry,
-            "RETRY SEED",
+            if g.custom.is_some() {
+                "RETRY COURSE"
+            } else {
+                "RETRY SEED"
+            },
             Action::Retry,
             g.results_sel == 1,
         );

@@ -1,0 +1,66 @@
+//! The developer flags on the command line, with no engine in them, as in
+//! Salt Line's `cli.rs`.
+//!
+//! The node collects the arguments (Godot splits them either side of `--`,
+//! and both halves are read) and [`DevArgs::parse`] reads them. A flag
+//! with a value takes it as the next argument or after `=`
+//! (`--racer-layout RL04…`, `--racer-layout=course.txt`); the first
+//! occurrence wins, and a next argument that starts `--` is another flag,
+//! not the value.
+
+/// Every developer flag, parsed.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DevArgs {
+    /// `--racer-layout <code|path>`: race that layout at once, as a custom
+    /// race (DESIGN §9.6): timed if it is proven, free drive if not. A path
+    /// (a layout file or a bare code; `res://` and `user://` work) is read
+    /// if it exists, otherwise the text is the code.
+    pub layout: Option<String>,
+}
+
+impl DevArgs {
+    /// Read the flags out of `args`; anything else is ignored.
+    pub fn parse(args: &[String]) -> DevArgs {
+        DevArgs {
+            layout: value(args, "--racer-layout"),
+        }
+    }
+}
+
+/// The value of `flag` in `args`, if given one.
+fn value(args: &[String], flag: &str) -> Option<String> {
+    for (i, a) in args.iter().enumerate() {
+        if let Some(v) = a.strip_prefix(flag) {
+            if let Some(v) = v.strip_prefix('=') {
+                return Some(v.to_string());
+            }
+            if v.is_empty() {
+                return args.get(i + 1).filter(|n| !n.starts_with("--")).cloned();
+            }
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(s: &str) -> Vec<String> {
+        s.split_whitespace().map(String::from).collect()
+    }
+
+    #[test]
+    fn the_layout_flag_takes_a_value_either_way() {
+        let p = |s| DevArgs::parse(&args(s)).layout;
+        assert_eq!(p("--racer-layout RL04 --x"), Some("RL04".into()));
+        assert_eq!(
+            p("-- --racer-layout=res://c.txt"),
+            Some("res://c.txt".into())
+        );
+        assert_eq!(p("--racer-layout --other"), None);
+        assert_eq!(p("--racer-layoutX y"), None);
+        assert_eq!(p(""), None);
+        assert_eq!(p("--racer-layout A --racer-layout B"), Some("A".into()));
+    }
+}

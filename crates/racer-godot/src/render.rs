@@ -36,6 +36,9 @@ pub struct RaceScene<'a> {
     pub tick: u32,
     /// Ticks left on the timer.
     pub timer: u32,
+    /// Whether the race has a timer: false is a custom race's free drive
+    /// (DESIGN §9.6), which shows FREE in place of the time.
+    pub timed: bool,
     /// The next checkpoint to cross.
     pub next_gate: usize,
     /// This tick's input, for the car's lean.
@@ -62,6 +65,7 @@ impl<'a> RaceScene<'a> {
             car: *race.car(),
             tick: race.tick(),
             timer: race.timer(),
+            timed: !race.track().allot_ticks().is_empty(),
             next_gate: race.next_gate(),
             input: race.input(),
             index,
@@ -601,11 +605,15 @@ pub fn secs(ticks: u32) -> String {
 pub fn hud(c: &mut Canvas, l: &Layout, s: &RaceScene) {
     let r = l.hud;
     c.rect(r.x, r.y, r.w, r.h, INK);
-    let low = s.timer < 5 * racer_sim::TICKS_PER_SEC;
+    let low = s.timed && s.timer < 5 * racer_sim::TICKS_PER_SEC;
     let flash = s.tick % 30 < 15;
     c.text(r.x + 3, r.y + 2, "TIME", WHITE, 1);
     let tc = if low && flash { RED } else { YELLOW };
-    c.text_big(r.x + 3, r.y + 9, &secs(s.timer), tc);
+    if s.timed {
+        c.text_big(r.x + 3, r.y + 9, &secs(s.timer), tc);
+    } else {
+        c.text_big(r.x + 3, r.y + 9, "FREE", WHITE);
+    }
     let kmh = (s.car.v * 3.6).round() as i32;
     c.text(r.x + 62, r.y + 2, "KM/H", WHITE, 1);
     c.text_big(r.x + 62, r.y + 9, &format!("{kmh}"), WHITE);
@@ -747,6 +755,7 @@ pub(crate) mod tests {
             car,
             tick: 600,
             timer: 20 * 120,
+            timed: true,
             next_gate: 0,
             input: Input::new(steer, false, false),
             index: 1,

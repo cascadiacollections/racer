@@ -36,6 +36,11 @@
 //! RETRY SEED on the results screen starts the same seed again: the same
 //! tracks, so the ghosts of the last attempt are there to race.
 //!
+//! A custom race (DESIGN §9.6, `custom.rs`) is a run of one layout's track,
+//! started by [`Game::start_custom`]: no forks, no builder, timed only when
+//! the layout is proven, its ghost kept under the layout's digest. RETRY on
+//! its results races the same layout again.
+//!
 //! Sound is decided here too (`audio`): one-shots from what changed between
 //! sim ticks, the engine and tyre loops from the car each frame, the title
 //! music from the mode. DEMO asks for none of it.
@@ -45,9 +50,9 @@ use std::sync::Arc;
 
 use racer_sim::bot::human::{HumanBot, HumanPlan};
 use racer_sim::bot::Driver;
-use racer_sim::gen::difficulty::TRACKS;
-use racer_sim::ghost::{Ghost, GhostRun, GhostStore};
+use racer_sim::ghost::{Ghost, GhostRun, GhostStore, TrackKey};
 use racer_sim::input::Input;
+use racer_sim::layout::CUSTOM_LOADOUT;
 use racer_sim::replay::{encode_run, Ending, Replay, RunFile};
 use racer_sim::rng::{mix64, substream};
 use racer_sim::run::{RunPhase, RunState, TrackCache};
@@ -56,6 +61,7 @@ use racer_sim::DT;
 
 use crate::audio::{loop_targets, Loops, Mixer, Sfx, Watch};
 use crate::builder::{Build, Key};
+use crate::custom::Custom;
 use crate::input::{bind, pressed, Controls, Event, Intents, SteerRamp};
 use crate::layout::{buffer_size, inset_rows, Layout, H_MIN};
 use crate::render::{Decor, Held};
@@ -187,6 +193,8 @@ pub struct Game {
     gates_seen: usize,
     /// Retries of this seed before this attempt, for the run file's name.
     attempt: u32,
+    /// The layout being raced, in a custom race.
+    pub custom: Option<Custom>,
 }
 
 impl Game {
@@ -228,6 +236,7 @@ impl Game {
             ghost_note: None,
             gates_seen: 0,
             attempt: 0,
+            custom: None,
         }
     }
 
@@ -446,8 +455,13 @@ impl Game {
         if retry && self.demo.is_none() {
             self.sfx.push(Sfx::Click);
             let (seed, attempt) = (self.seed, self.attempt + 1);
-            self.go_to_title();
-            self.start_seed(seed, false);
+            match self.custom.take() {
+                Some(c) => self.start_custom(c),
+                None => {
+                    self.go_to_title();
+                    self.start_seed(seed, false);
+                }
+            }
             self.attempt = attempt;
         } else if confirm || self.touch.pressed(Action::Continue) {
             self.sfx.push(Sfx::Click);
@@ -473,7 +487,9 @@ impl Game {
 
     /// Queue the current run for saving, unless DEMO drove it.
     fn save_run(&mut self, ending: Ending) {
-        let (Some(run), None) = (&self.run, &self.demo) else {
+        let (Some(run), None, None) = (&self.run, &self.demo, &self.custom) else {
+            // A custom race's replay needs its layout, which a run file
+            // does not hold yet (DESIGN §9.8).
             return;
         };
         let f = RunFile {
@@ -499,6 +515,7 @@ impl Game {
         self.watch = None;
         self.ghost = None;
         self.ghost_note = None;
+        self.custom = None;
         self.results_sel = 0;
         self.touch.release_all();
         self.held = Held::default();
@@ -526,13 +543,32 @@ impl Game {
         self.fx.push(Effect::Redraw);
     }
 
+    /// Race `c`'s layout alone, at once: a custom race (DESIGN §9.6).
+    pub fn start_custom(&mut self, c: Custom) {
+        self.go_to_title();
+        self.attempt = 0;
+        self.seed = c.layout.hash();
+        self.run = Some(RunState::single(self.seed, c.track.clone(), CUSTOM_LOADOUT));
+        self.custom = Some(c);
+        self.begin_race();
+    }
+
+    /// The ghost store's key for the track being raced.
+    fn track_key(&self) -> Option<TrackKey> {
+        let run = self.run.as_ref()?;
+        Some(match &self.custom {
+            Some(c) => c.ghost_key(),
+            None => (self.seed, run.index(), run.branch()),
+        })
+    }
+
     fn begin_race(&mut self) {
+        let Some(key) = self.track_key() else { return };
         let Some(run) = &self.run else { return };
         let index = run.index();
         let track = run.race().track().clone();
         self.watch = Some(Watch::new(run.race()));
         self.decor = Decor::new(&track);
-        let key = (self.seed, index, run.branch());
         self.ghost = match (&self.demo, self.ghosts.get(key)) {
             (None, Some(g)) => GhostRun::new(track.clone(), g),
             _ => None,
@@ -544,7 +580,7 @@ impl Game {
             d.bot = Some(HumanBot::new(plan, substream(self.seed, index as u64)));
             d.fork_wait = DEMO_FORK_WAIT;
         }
-        if index + 1 < TRACKS {
+        if index + 1 < run.tracks() {
             for b in 0..2 {
                 self.request((self.seed, index + 1, b));
             }
@@ -567,13 +603,14 @@ impl Game {
     /// The player finished the track: keep the race as its ghost if it is
     /// the best there, and have the store written if so. Never for DEMO.
     fn record_best(&mut self) {
+        let Some(key) = self.track_key() else { return };
         let (Some(run), None) = (&self.run, &self.demo) else {
             return;
         };
         let Some(g) = Ghost::of(run.race(), run.loadout()) else {
             return;
         };
-        if self.ghosts.offer((self.seed, run.index(), run.branch()), g) {
+        if self.ghosts.offer(key, g) {
             self.fx.push(Effect::SaveGhosts {
                 text: self.ghosts.encode(racer_sim::SIM_EPOCH),
             });
@@ -1292,5 +1329,47 @@ mod tests {
             .iter()
             .all(|e| !matches!(e, Effect::Loops(l) if !l.silent())));
         assert!(fx.contains(&Effect::Music(false)), "the title music stops");
+    }
+
+    #[test]
+    fn a_custom_race_is_one_track_free_unless_proven_with_its_own_ghost() {
+        use racer_sim::layout::Layout;
+        let mut g = game(30.0);
+        frame(&mut g, vec![], vec![]);
+        // An unproven layout: free drive, no timer, one track.
+        let draft = Layout::from_track(&fixtures::drag_strip());
+        let (c, _) = crate::custom::load(&draft.to_code().unwrap(), false).unwrap();
+        assert!(!c.timed);
+        let key = c.ghost_key();
+        g.start_custom(c);
+        assert_eq!(g.mode, Mode::Racing);
+        assert!(g
+            .run
+            .as_ref()
+            .unwrap()
+            .race()
+            .track()
+            .allot_ticks()
+            .is_empty());
+        for _ in 0..2000 {
+            frame(&mut g, vec![], vec![]);
+            if g.mode != Mode::Racing {
+                break;
+            }
+        }
+        assert_eq!(g.mode, Mode::Results, "finished the strip");
+        assert_eq!(g.run.as_ref().unwrap().phase(), RunPhase::Won);
+        assert!(g.ghosts().get(key).is_some(), "kept under the layout's key");
+        // RETRY COURSE races it again, with its ghost.
+        g.results_sel = 1;
+        frame(&mut g, vec![Event::Key(K::Enter)], vec![]);
+        assert_eq!(g.mode, Mode::Racing);
+        assert!(g.custom.is_some() && g.ghost().is_some());
+        // A proven layout races timed.
+        let course = racer_sim::layout::bundled::layouts().remove(0);
+        let (c, _) = crate::custom::load(&course.to_code().unwrap(), false).unwrap();
+        g.start_custom(c);
+        let race = g.run.as_ref().unwrap().race();
+        assert_eq!(race.timer(), course.proof.unwrap().allot_ticks[0]);
     }
 }
