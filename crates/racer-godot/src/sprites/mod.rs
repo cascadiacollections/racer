@@ -1,16 +1,26 @@
-//! Placeholder pixel sprites, generated procedurally once at startup.
+//! Every sprite, drawn procedurally once at startup.
 //!
 //! DESIGN §5's rule is that nothing is scaled or rotated at draw time: a
 //! sprite seen at some depth is drawn from the nearest of a few pre-drawn
-//! sizes ([`SCALES`]), copied 1:1. Until there is real art, each kind is a
-//! shape function over the unit square, sampled at every size here, so a
-//! small sprite is drawn small rather than shrunk from a big one. The player
-//! car has fixed-size frames for straight, leaning and drifting either way.
+//! sizes ([`SCALES`]), copied 1:1. Each size is drawn for itself, so a
+//! small sprite is designed small rather than shrunk from a big one.
+//!
+//! - The cars ([`car`], [`traffic`]) are little solid models
+//!   ([`solid`]) drawn once per pose and size: the player's car in every
+//!   lean, drift and spin frame, brake lamps off and lit; traffic and the
+//!   ghost at every step, from the angle the camera sees that depth at.
+//! - Roadside things are shape functions over the unit square, sampled at
+//!   every size.
 //!
 //! Every pixel is a palette index; the shapes only ever pick from
-//! [`crate::palette`].
+//! [`crate::palette`]. The cars use only the indices every biome shares.
+
+pub mod car;
+pub mod solid;
 
 use racer_sim::biome::Biome;
+
+pub use car::{CarArt, CarFrame, CarSprite, Fx, SPIN_FRAMES};
 
 use crate::palette::*;
 use crate::raster::Sprite;
@@ -315,55 +325,22 @@ fn car(u: f64, v: f64, w: i32, livery: Livery, skew: f64, side: i32) -> u8 {
     C
 }
 
-const PLAYER: Livery = Livery {
-    body: RED,
-    shade: RED_DK,
-    lights: YELLOW,
-};
 const TRAFFIC: Livery = Livery {
     body: WATER,
     shade: INK,
     lights: RED,
 };
-/// The ghost of the player's best: pale, and see-through by dithering.
-const GHOST: Livery = Livery {
-    body: ICE,
-    shade: WATER,
-    lights: WHITE,
-};
 
-/// `s` with every other pixel cleared in a checkerboard: how a 16-colour
-/// raster with no blending draws something translucent.
-fn checkerboard(mut s: Sprite) -> Sprite {
-    for y in 0..s.h {
-        for x in 0..s.w {
-            if (x + y) & 1 == 1 {
-                s.set(x, y, C);
-            }
-        }
-    }
-    s
+/// The camera's angle down at something `scale` pixels a metre away,
+/// radians: steep close to the camera, nearly level far off. Pre-drawn
+/// cars at a scale step are drawn from this angle, so a far car shows its
+/// tail and a near one its roof. Capped where the roof would hide the
+/// tail.
+pub fn pitch_at(scale: f64) -> f64 {
+    let cam = crate::project::Camera::DEFAULT;
+    let dz = cam.focal / scale.max(1e-3);
+    (cam.height / dz).atan().min(0.55)
 }
-
-/// The player car's frames.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CarFrame {
-    /// Driving straight.
-    Straight = 0,
-    /// Steering left.
-    LeanLeft = 1,
-    /// Steering right.
-    LeanRight = 2,
-    /// Drifting with the nose left.
-    DriftLeft = 3,
-    /// Drifting with the nose right.
-    DriftRight = 4,
-}
-
-/// The player car's size, pixels.
-pub const CAR_W: i32 = 30;
-/// The player car's height, pixels.
-pub const CAR_H: i32 = 20;
 
 /// Every sprite the game draws.
 #[derive(Clone, Debug)]
@@ -390,20 +367,18 @@ pub struct Art {
     pub chevron: Steps,
     /// Traffic cars from behind.
     pub traffic: Steps,
-    /// The ghost of the player's best run: a car, pale and dithered.
+    /// The ghost of the player's best run: the player's car, pale and
+    /// dithered, with a solid outline.
     pub ghost: Steps,
-    /// The player's car, by [`CarFrame`].
-    pub car: [Sprite; 5],
+    /// The player's car, every pose.
+    pub car: CarArt,
+    /// Tyre smoke, the boost flame and the ghost's marker.
+    pub fx: Fx,
 }
 
 impl Art {
     /// Draw everything. Called once.
     pub fn new() -> Art {
-        let frame = |skew: f64, side: i32| {
-            sample(CAR_W, CAR_H, &|u, v, w, _h| {
-                car(u, v, w, PLAYER, skew, side)
-            })
-        };
         Art {
             post: Steps::new(0.4, 1.4, post),
             rock: Steps::new(2.2, 1.3, rock),
@@ -416,18 +391,12 @@ impl Art {
             city_post: Steps::new(0.4, 1.4, city_post),
             chevron: Steps::new(1.6, 2.4, chevron),
             traffic: Steps::new(2.0, 1.5, |u, v, w, _h| car(u, v, w, TRAFFIC, 0.0, 0)),
-            ghost: {
-                let mut g = Steps::new(2.0, 1.5, |u, v, w, _h| car(u, v, w, GHOST, 0.0, 0));
-                g.sprites = g.sprites.into_iter().map(checkerboard).collect();
-                g
+            ghost: Steps {
+                size_m: (1.8, 1.2),
+                sprites: SCALES.iter().map(|&s| car::ghost(s, pitch_at(s))).collect(),
             },
-            car: [
-                frame(0.0, 0),
-                frame(-2.0, 0),
-                frame(2.0, 0),
-                frame(-4.0, 1),
-                frame(4.0, -1),
-            ],
+            car: CarArt::new(),
+            fx: Fx::new(),
         }
     }
 }
@@ -460,6 +429,114 @@ impl Art {
 impl Default for Art {
     fn default() -> Self {
         Art::new()
+    }
+}
+
+impl Art {
+    /// Every sprite laid out on one sheet, for looking at: the player's
+    /// car in every pose (lamps off, then lit), its effects, traffic and
+    /// the ghost at every step on tarmac, then each biome's roadside
+    /// things at every step on its own verge, in its own colours.
+    pub fn sheet(&self) -> crate::raster::Canvas {
+        type Row<'a> = (&'a crate::palette::Palette, u8, Vec<&'a Sprite>);
+        let mut rows: Vec<Row> = Vec::new();
+        let meadow = &crate::palette::COLOURS;
+        rows.push((
+            meadow,
+            ASPHALT_LT,
+            self.car.frames.iter().map(|f| &f.body).collect(),
+        ));
+        rows.push((
+            meadow,
+            ASPHALT_DK,
+            self.car.frames.iter().map(|f| &f.braking).collect(),
+        ));
+        let fx: Vec<&Sprite> = self
+            .fx
+            .smoke
+            .iter()
+            .chain(self.fx.flame.iter())
+            .chain([&self.fx.marker])
+            .collect();
+        rows.push((meadow, ASPHALT_DK, fx));
+        for t in self.traffic_kinds() {
+            rows.push((meadow, ASPHALT_LT, t.sprites.iter().collect()));
+        }
+        rows.push((meadow, ASPHALT_LT, self.ghost.sprites.iter().collect()));
+        rows.push((meadow, ASPHALT_DK, self.ghost.sprites.iter().collect()));
+        for b in Biome::ALL {
+            let p = crate::palette::palette(b);
+            for k in [self.flora(b), self.post_for(b), &self.rock, &self.chevron] {
+                rows.push((p, GRASS_LT, k.sprites.iter().collect()));
+            }
+        }
+        let gap = 3;
+        let w = rows
+            .iter()
+            .map(|r| r.2.iter().map(|s| s.w + gap).sum::<i32>() + gap)
+            .max()
+            .unwrap_or(1);
+        let h: i32 = rows
+            .iter()
+            .map(|r| r.2.iter().map(|s| s.h).max().unwrap_or(0) + 2 * gap)
+            .sum();
+        let mut c = crate::raster::Canvas::new(w, h);
+        let mut y = 0;
+        for (pal, bg, sprites) in rows {
+            let rh = sprites.iter().map(|s| s.h).max().unwrap_or(0) + 2 * gap;
+            c.set_palette(pal);
+            c.rect(0, y, w, rh, bg);
+            let mut x = gap;
+            for s in sprites {
+                c.blit(s, x, y + rh - gap - s.h, i32::MAX, false);
+                x += s.w + gap;
+            }
+            y += rh;
+        }
+        c
+    }
+
+    /// Pixels held by every sprite, one byte each.
+    pub fn bytes(&self) -> usize {
+        let steps = [
+            &self.post,
+            &self.rock,
+            &self.tree,
+            &self.palm,
+            &self.cactus,
+            &self.pine,
+            &self.lamp,
+            &self.snow_post,
+            &self.city_post,
+            &self.chevron,
+            &self.ghost,
+        ];
+        let px = |s: &Sprite| s.px.len();
+        steps
+            .iter()
+            .chain(self.traffic_kinds().iter())
+            .flat_map(|k| k.sprites.iter())
+            .map(px)
+            .sum::<usize>()
+            + self
+                .car
+                .frames
+                .iter()
+                .map(|f| px(&f.body) + px(&f.braking))
+                .sum::<usize>()
+            + self
+                .fx
+                .smoke
+                .iter()
+                .chain(self.fx.flame.iter())
+                .chain([&self.fx.marker])
+                .map(px)
+                .sum::<usize>()
+    }
+
+    /// Each kind of traffic, every livery.
+    pub fn traffic_kinds(&self) -> Vec<&Steps> {
+        vec![&self.traffic]
     }
 }
 
@@ -505,10 +582,6 @@ mod tests {
                 assert!(s.px.iter().any(|&c| c != Sprite::CLEAR), "empty sprite");
             }
         }
-        for f in &art.car {
-            assert_eq!((f.w, f.h), (CAR_W, CAR_H));
-            assert!(f.px.iter().all(|&c| c == Sprite::CLEAR || c < 16));
-        }
     }
 
     #[test]
@@ -531,39 +604,63 @@ mod tests {
         assert!(!lit.is_empty() && lit.iter().all(|&x| x < big.w / 2));
     }
 
+    /// `cargo test -p racer-godot dump_sprite_sheet -- --ignored`: every
+    /// sprite on one sheet, `target/frames/sprite_sheet.ppm`.
     #[test]
-    fn the_ghost_is_a_pale_checkerboard() {
+    #[ignore]
+    fn dump_sprite_sheet() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/frames");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(".gdignore"), "").unwrap();
+        std::fs::write(dir.join("sprite_sheet.ppm"), Art::new().sheet().ppm()).unwrap();
+    }
+
+    /// The cost of drawing everything, once, at startup: `cargo test
+    /// --release -p racer-godot art_build_cost -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "timing, run by hand in release"]
+    fn art_build_cost() {
+        let n = 20;
+        let start = std::time::Instant::now();
+        let mut bytes = 0;
+        for _ in 0..n {
+            let a = Art::new();
+            bytes = a.bytes();
+        }
+        let ms = start.elapsed().as_secs_f64() * 1e3 / n as f64;
+        println!("art_build_cost: {ms:.2} ms per Art::new ({bytes} bytes of sprites)");
+    }
+
+    #[test]
+    fn the_ghost_is_pale_see_through_and_outlined() {
         let art = Art::new();
         for s in &art.ghost.sprites {
+            let mut holes = 0;
             for y in 0..s.h {
                 for x in 0..s.w {
                     let c = s.at(x, y);
-                    if (x + y) & 1 == 1 {
-                        assert_eq!(c, Sprite::CLEAR, "see-through on odd cells");
-                    }
                     assert!(
-                        c == Sprite::CLEAR || [ICE, WATER, WHITE, INK, ASPHALT_LT].contains(&c)
+                        c == Sprite::CLEAR || [ICE, WATER, WHITE, INK].contains(&c),
+                        "{c}"
                     );
+                    // Inside the outline, every other pixel is a hole.
+                    let inside = [(1, 0), (-1, 0), (0, 1), (0, -1)]
+                        .iter()
+                        .all(|&(dx, dy)| s.at(x + dx, y + dy) != Sprite::CLEAR);
+                    if c == Sprite::CLEAR && (1..s.w - 1).contains(&x) {
+                        holes += usize::from(inside);
+                    }
                 }
             }
+            assert!(holes > 0 || s.w < 8, "see-through: {}x{}", s.w, s.h);
         }
         let big = art.ghost.sprites.last().unwrap();
         assert!(big.px.contains(&ICE), "the body is ghost-blue");
         assert!(!big.px.contains(&RED), "never the player's red");
-    }
-
-    #[test]
-    fn car_frames_differ_and_lean_their_way() {
-        let art = Art::new();
-        for i in 0..5 {
-            for j in i + 1..5 {
-                assert_ne!(art.car[i], art.car[j], "frames {i} and {j}");
-            }
-        }
-        // The roof's leftmost pixel moves left when leaning left.
-        let left_edge = |s: &Sprite| (0..s.w).find(|&x| s.at(x, 2) != Sprite::CLEAR).unwrap();
-        let straight = left_edge(&art.car[CarFrame::Straight as usize]);
-        assert!(left_edge(&art.car[CarFrame::LeanLeft as usize]) < straight);
-        assert!(left_edge(&art.car[CarFrame::LeanRight as usize]) > straight);
+        // The far steps keep a solid pale outline, so a few pixels still
+        // read as a car-shaped thing.
+        let far = &art.ghost.sprites[2];
+        let solid = far.px.iter().filter(|&&c| c == WHITE).count();
+        assert!(solid >= far.w as usize, "{solid} outline pixels");
     }
 }
