@@ -69,6 +69,8 @@ fn title(g: &Game, c: &mut Canvas, art: &Art, l: &Layout) -> Vec<Button> {
         index: 0,
         tracks: TRACKS,
         bg_shift: (g.clock * 4.0) as i32,
+        ghost: None,
+        ghost_note: None,
     };
     render::road(c, l, art, &g.title_decor, &scene);
     let cx = l.w / 2;
@@ -110,7 +112,9 @@ fn racing(g: &Game, c: &mut Canvas, art: &Art, l: &Layout) -> Vec<Button> {
     let Some(run) = &g.run else {
         return Vec::new();
     };
-    let scene = RaceScene::of(run.race(), run.index(), TRACKS, g.bg.round() as i32);
+    let mut scene = RaceScene::of(run.race(), run.index(), TRACKS, g.bg.round() as i32);
+    scene.ghost = g.ghost().map(|gh| (gh.car().z, gh.car().x));
+    scene.ghost_note = g.ghost_note();
     let held = if g.paused { Held::default() } else { g.held };
     render::race_frame(c, l, art, &g.decor, &scene, held);
     let mut out = Vec::new();
@@ -367,7 +371,27 @@ fn results(g: &Game, c: &mut Canvas, l: &Layout) -> Vec<Button> {
     c.text(10, 118, &format!("TOTAL {}S", secs(total)), YELLOW, 1);
     c.text(10, 130, &run.loadout().describe().to_uppercase(), WHITE, 1);
     let r = Rect::new(6, l.bottom() - 52, l.w - 12, 46);
-    labelled(c, &mut out, r, "CONTINUE", Action::Continue, true);
+    if !g.demo() {
+        // The same seed again: the same roads, with this run's best on each
+        // track as its ghost.
+        let retry = Rect::new(6, r.y - 40, l.w - 12, 34);
+        labelled(
+            c,
+            &mut out,
+            retry,
+            "RETRY SEED",
+            Action::Retry,
+            g.results_sel == 1,
+        );
+    }
+    labelled(
+        c,
+        &mut out,
+        r,
+        "CONTINUE",
+        Action::Continue,
+        g.results_sel == 0,
+    );
     out
 }
 
@@ -441,7 +465,7 @@ mod tests {
         }
         let (c, b) = step(&mut g, vec![]);
         assert_eq!(g.mode, Mode::Results);
-        assert!(has(&b, Action::Continue));
+        assert!(has(&b, Action::Continue) && has(&b, Action::Retry));
         out.push(("time_up", c));
         out
     }

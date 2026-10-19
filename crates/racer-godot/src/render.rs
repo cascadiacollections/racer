@@ -46,6 +46,12 @@ pub struct RaceScene<'a> {
     pub tracks: u32,
     /// The background's sideways scroll, whole pixels.
     pub bg_shift: i32,
+    /// The ghost of the player's best run here, while it is still driving:
+    /// its `(z, x)`, metres.
+    pub ghost: Option<(f64, f64)>,
+    /// The player's time against the ghost's at the last gate, ticks
+    /// (negative is ahead), while it is shown.
+    pub ghost_note: Option<i64>,
 }
 
 impl<'a> RaceScene<'a> {
@@ -61,6 +67,8 @@ impl<'a> RaceScene<'a> {
             index,
             tracks,
             bg_shift,
+            ghost: None,
+            ghost_note: None,
         }
     }
 
@@ -457,6 +465,12 @@ pub fn road(c: &mut Canvas, l: &Layout, art: &Art, decor: &Decor, s: &RaceScene)
             false,
         );
     }
+    // The ghost is one more thing on the road, sorted by depth with the
+    // rest and clipped by crests like them. Behind the camera it has no
+    // place; under the player's car it is drawn first and covered.
+    if let Some((z, x)) = s.ghost {
+        stand(&mut things, &art.ghost, v.place(z, x), false);
+    }
     let gates = s.track.checkpoints();
     for (k, &g) in gates.iter().enumerate().skip(s.next_gate) {
         if let Some(at) = v.place(g as f64 * SEG_LEN + 0.01, 0.0) {
@@ -564,6 +578,19 @@ fn player(c: &mut Canvas, v: &RoadView, s: &RaceScene, art: &Art, bottom: i32) {
 
 // ----------------------------------------------------------------- the HUD
 
+/// A gate's time against the ghost's, `delta` ticks (positive is behind
+/// it): `GHOST +1.2S`, `GHOST -0.8S`, to the nearest tenth.
+pub fn ghost_delta(delta: i64) -> String {
+    let tenths = (delta.unsigned_abs() * 10 + racer_sim::TICKS_PER_SEC as u64 / 2)
+        / racer_sim::TICKS_PER_SEC as u64;
+    let sign = match (delta.signum(), tenths) {
+        (_, 0) => "",
+        (1, _) => "+",
+        _ => "-",
+    };
+    format!("GHOST {sign}{}.{}S", tenths / 10, tenths % 10)
+}
+
 /// Seconds as `12.3`.
 pub fn secs(ticks: u32) -> String {
     let tenths = (ticks as u64 * 10).div_ceil(racer_sim::TICKS_PER_SEC as u64);
@@ -619,6 +646,13 @@ pub fn hud(c: &mut Canvas, l: &Layout, s: &RaceScene) {
         let w = crate::font::small_width(&text) as i32;
         c.rect(l.road.w - w - 5, 2, w + 4, 9, INK);
         c.text(l.road.w - w - 3, 4, &text, WHITE, 1);
+    }
+    if let Some(d) = s.ghost_note {
+        let text = ghost_delta(d);
+        let w = crate::font::small_width(&text) as i32;
+        let ink = if d <= 0 { GRASS_LT } else { RED };
+        c.rect(l.road.w - w - 5, 12, w + 4, 9, INK);
+        c.text(l.road.w - w - 3, 14, &text, ink, 1);
     }
     if s.drift_ahead().is_some() && flash {
         let text = "DRIFT!";
@@ -718,6 +752,8 @@ pub(crate) mod tests {
             index: 1,
             tracks: 5,
             bg_shift: 0,
+            ghost: None,
+            ghost_note: None,
         }
     }
 
@@ -890,6 +926,89 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_ghost_ahead_is_drawn_and_one_behind_the_camera_is_not() {
+        let t = fixtures::drag_strip();
+        let plain = scene(&t, 40.0, 0.0, 0);
+        let none = draw(&plain, 320);
+        // Ghost-blue pixels that are not in the frame without a ghost (the
+        // clouds' bases are the same colour).
+        let ghost_px = |c: &Canvas| {
+            (0..c.h)
+                .flat_map(|y| (0..c.w).map(move |x| (x, y)))
+                .filter(|&(x, y)| c.get(x, y) == rgba(ICE) && none.get(x, y) != rgba(ICE))
+                .count()
+        };
+        let mut ahead = plain;
+        ahead.ghost = Some((40.0 + 12.0, 1.5));
+        let c = draw(&ahead, 320);
+        assert!(c.palette_only());
+        assert_ne!(c.digest(), none.digest());
+        assert!(
+            ghost_px(&c) >= 8,
+            "a ghost 12 m ahead shows: {}",
+            ghost_px(&c)
+        );
+        // Right of centre, above the player's car, on the road.
+        let l = Layout::new(320);
+        let v = RoadView::build(&t, 40.0, 0.0, l.road.w, l.road.h, Camera::DEFAULT);
+        let at = v.place(52.0, 1.5).unwrap();
+        assert!(at.x > l.road.w / 2 && at.y < v.car_row());
+        assert!((at.y - 12..at.y).any(|y| (at.x - 8..at.x + 8)
+            .any(|x| c.get(x, y) == rgba(ICE) && none.get(x, y) != rgba(ICE))));
+        // Behind the camera (5 m back) it has no place on screen at all.
+        let mut behind = plain;
+        behind.ghost = Some((40.0 - 8.0, 0.0));
+        assert_eq!(draw(&behind, 320).digest(), none.digest());
+    }
+
+    #[test]
+    fn a_ghost_over_a_crest_is_hidden_like_everything_else() {
+        let t = fixtures::blind_crest();
+        let s = scene(&t, 34.0 * SEG_LEN, 0.0, 0);
+        let l = Layout::new(400);
+        let v = RoadView::build(&t, s.car.z, 0.0, l.road.w, l.road.h, Camera::DEFAULT);
+        // A point down the far side of the crest, deep enough that even the
+        // car's roof is under the hilltop.
+        let hidden = (40..120)
+            .map(|k| k as f64 * SEG_LEN + 0.5)
+            .find(|&z| {
+                let art = Art::new();
+                !v.visible((z / SEG_LEN) as i64)
+                    && v.place(z, 0.0).is_some_and(|p| {
+                        art.ghost
+                            .pick(p.scale)
+                            .is_some_and(|g| p.y - g.h >= p.clip.min(l.road.h))
+                    })
+            })
+            .expect("the crest hides some road");
+        let mut g = s;
+        g.ghost = Some((hidden, 0.0));
+        assert_eq!(draw(&g, 400).digest(), draw(&s, 400).digest());
+    }
+
+    #[test]
+    fn the_ghost_delta_reads_to_the_tenth_with_its_sign() {
+        assert_eq!(ghost_delta(144), "GHOST +1.2S");
+        assert_eq!(ghost_delta(-96), "GHOST -0.8S");
+        assert_eq!(ghost_delta(0), "GHOST 0.0S");
+        assert_eq!(ghost_delta(5), "GHOST 0.0S", "under a twentieth is even");
+        assert_eq!(ghost_delta(6), "GHOST +0.1S");
+        assert_eq!(ghost_delta(-1200), "GHOST -10.0S");
+    }
+
+    #[test]
+    fn the_hud_shows_the_ghost_delta_in_its_colour() {
+        let t = fixtures::drag_strip();
+        let mut s = scene(&t, 40.0, 0.0, 0);
+        s.ghost_note = Some(-96);
+        let c = draw(&s, 320);
+        assert!((14..19).any(|y| (90..180).any(|x| c.get(x, y) == rgba(GRASS_LT))));
+        s.ghost_note = Some(144);
+        let c = draw(&s, 320);
+        assert!((14..19).any(|y| (90..180).any(|x| c.get(x, y) == rgba(RED))));
+    }
+
+    #[test]
     fn timer_text_rounds_up_to_the_tenth() {
         assert_eq!(secs(0), "0.0");
         assert_eq!(secs(1), "0.1");
@@ -953,6 +1072,12 @@ pub(crate) mod tests {
         s.car.charge = 0.9;
         s.car.boost_ticks = 0;
         out.push(("drift_corner_signed", draw(&s, 400)));
+        // The only golden scene with a ghost: the player's best, 7 m up the
+        // road through the sweep, and how the player stood at the last gate.
+        let mut s = scene(&sweep, 60.0 * SEG_LEN, 0.5, 1);
+        s.ghost = Some((60.0 * SEG_LEN + 7.0, -2.0));
+        s.ghost_note = Some(-96);
+        out.push(("ghost_ahead", draw(&s, 360)));
         out
     }
 

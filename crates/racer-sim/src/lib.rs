@@ -36,6 +36,7 @@ pub mod bot; // the perfect and human-like drivers that prove a track
 pub mod car; // speed, offset, the drift state machine
 pub mod dmath; // platform-stable trig, so the sim never calls libm
 pub mod gen; // grammar, overlays, timer calibration
+pub mod ghost; // the best race per track, stored and driven back as a ghost
 pub mod hash; // FNV-1a, for track digests and the run state hash
 pub mod input; // one byte per tick: seven steer levels, brake, drift
 pub mod race; // one race: the car, the checkpoint timer, the input log

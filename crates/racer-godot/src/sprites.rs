@@ -198,6 +198,25 @@ const TRAFFIC: Livery = Livery {
     shade: INK,
     lights: RED,
 };
+/// The ghost of the player's best: pale, and see-through by dithering.
+const GHOST: Livery = Livery {
+    body: ICE,
+    shade: WATER,
+    lights: WHITE,
+};
+
+/// `s` with every other pixel cleared in a checkerboard: how a 16-colour
+/// raster with no blending draws something translucent.
+fn checkerboard(mut s: Sprite) -> Sprite {
+    for y in 0..s.h {
+        for x in 0..s.w {
+            if (x + y) & 1 == 1 {
+                s.set(x, y, C);
+            }
+        }
+    }
+    s
+}
 
 /// The player car's frames.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -232,6 +251,8 @@ pub struct Art {
     pub chevron: Steps,
     /// Traffic cars from behind.
     pub traffic: Steps,
+    /// The ghost of the player's best run: a car, pale and dithered.
+    pub ghost: Steps,
     /// The player's car, by [`CarFrame`].
     pub car: [Sprite; 5],
 }
@@ -250,6 +271,11 @@ impl Art {
             tree: Steps::new(4.0, 7.0, tree),
             chevron: Steps::new(1.6, 2.4, chevron),
             traffic: Steps::new(2.0, 1.5, |u, v, w, _h| car(u, v, w, TRAFFIC, 0.0, 0)),
+            ghost: {
+                let mut g = Steps::new(2.0, 1.5, |u, v, w, _h| car(u, v, w, GHOST, 0.0, 0));
+                g.sprites = g.sprites.into_iter().map(checkerboard).collect();
+                g
+            },
             car: [
                 frame(0.0, 0),
                 frame(-2.0, 0),
@@ -289,7 +315,14 @@ mod tests {
     #[test]
     fn sprites_use_only_palette_indices() {
         let art = Art::new();
-        let all = [&art.post, &art.rock, &art.tree, &art.chevron, &art.traffic];
+        let all = [
+            &art.post,
+            &art.rock,
+            &art.tree,
+            &art.chevron,
+            &art.traffic,
+            &art.ghost,
+        ];
         for k in all {
             for s in &k.sprites {
                 assert!(s.px.iter().all(|&c| c == Sprite::CLEAR || c < 16));
@@ -300,6 +333,27 @@ mod tests {
             assert_eq!((f.w, f.h), (CAR_W, CAR_H));
             assert!(f.px.iter().all(|&c| c == Sprite::CLEAR || c < 16));
         }
+    }
+
+    #[test]
+    fn the_ghost_is_a_pale_checkerboard() {
+        let art = Art::new();
+        for s in &art.ghost.sprites {
+            for y in 0..s.h {
+                for x in 0..s.w {
+                    let c = s.at(x, y);
+                    if (x + y) & 1 == 1 {
+                        assert_eq!(c, Sprite::CLEAR, "see-through on odd cells");
+                    }
+                    assert!(
+                        c == Sprite::CLEAR || [ICE, WATER, WHITE, INK, ASPHALT_LT].contains(&c)
+                    );
+                }
+            }
+        }
+        let big = art.ghost.sprites.last().unwrap();
+        assert!(big.px.contains(&ICE), "the body is ghost-blue");
+        assert!(!big.px.contains(&RED), "never the player's red");
     }
 
     #[test]

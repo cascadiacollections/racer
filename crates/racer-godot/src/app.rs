@@ -28,6 +28,14 @@
 //! Racing pauses on focus loss and on the back gesture; DEMO lets the sim's
 //! human-like bot drive and pick forks, and any input ends it.
 //!
+//! The ghost of the player's best (`racer_sim::ghost`) is decided here too:
+//! a finished track's race is offered to the [`GhostStore`] (kept as
+//! `ghosts.txt` by the adapter through [`Effect::SaveGhosts`]), and a race on
+//! a track with a stored best drives a [`GhostRun`] one tick per player
+//! tick. It only ever reads the player's race, never steps or changes it.
+//! RETRY SEED on the results screen starts the same seed again: the same
+//! tracks, so the ghosts of the last attempt are there to race.
+//!
 //! Sound is decided here too (`audio`): one-shots from what changed between
 //! sim ticks, the engine and tyre loops from the car each frame, the title
 //! music from the mode. DEMO asks for none of it.
@@ -38,6 +46,7 @@ use std::sync::Arc;
 use racer_sim::bot::human::{HumanBot, HumanPlan};
 use racer_sim::bot::Driver;
 use racer_sim::gen::difficulty::TRACKS;
+use racer_sim::ghost::{Ghost, GhostRun, GhostStore};
 use racer_sim::input::Input;
 use racer_sim::replay::{encode_run, Ending, Replay, RunFile};
 use racer_sim::rng::{mix64, substream};
@@ -61,6 +70,12 @@ pub const BG_PX_PER_RAD: f64 = 150.0;
 
 /// How long DEMO looks at a fork before picking, seconds.
 pub const DEMO_FORK_WAIT: f64 = 2.0;
+
+/// How long a gate's time against the ghost stays up, race ticks.
+pub const GHOST_NOTE_TICKS: u32 = 2 * racer_sim::TICKS_PER_SEC;
+
+/// The ghost file's name, in the adapter's `user://ghosts`.
+pub const GHOSTS_FILE: &str = "ghosts.txt";
 
 /// Where the game is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -99,6 +114,10 @@ pub enum Effect {
     Loops(Loops),
     /// Start or stop the title music.
     Music(bool),
+    /// The best-per-track store changed: write `text`
+    /// ([`GhostStore::encode`]) as [`GHOSTS_FILE`] in the user data
+    /// directory. Never for DEMO.
+    SaveGhosts { text: String },
 }
 
 /// The DEMO driver.
@@ -121,6 +140,9 @@ pub struct Game {
     pub seed: u64,
     /// The fork card selected by keys or pad.
     pub fork_sel: u8,
+    /// The results button selected by keys or pad: 0 is CONTINUE, 1 is
+    /// RETRY SEED.
+    pub results_sel: u8,
     /// Background scroll, pixels (fractional; drawn snapped).
     pub bg: f64,
     /// Seconds since launch, for menu animation.
@@ -154,6 +176,17 @@ pub struct Game {
     mixer: Mixer,
     /// Whether the title music was last asked to play.
     music: bool,
+    /// The fastest finish per track.
+    ghosts: GhostStore,
+    /// The ghost on the track being raced, if it has a stored best.
+    ghost: Option<GhostRun>,
+    /// The last gate's time against the ghost, ticks, and the race tick it
+    /// is shown until.
+    ghost_note: Option<(i64, u32)>,
+    /// Gates crossed on this track so far, to notice the next.
+    gates_seen: usize,
+    /// Retries of this seed before this attempt, for the run file's name.
+    attempt: u32,
 }
 
 impl Game {
@@ -189,7 +222,37 @@ impl Game {
             watch: None,
             mixer: Mixer::default(),
             music: false,
+            results_sel: 0,
+            ghosts: GhostStore::new(),
+            ghost: None,
+            ghost_note: None,
+            gates_seen: 0,
+            attempt: 0,
         }
+    }
+
+    /// Read the stored ghosts ([`GHOSTS_FILE`]'s text). Ghosts from another
+    /// sim epoch and damaged lines are dropped.
+    pub fn load_ghosts(&mut self, text: &str) {
+        self.ghosts = GhostStore::decode(text, racer_sim::SIM_EPOCH);
+    }
+
+    /// The stored ghosts.
+    pub fn ghosts(&self) -> &GhostStore {
+        &self.ghosts
+    }
+
+    /// The ghost to draw: on this track, and still driving.
+    pub fn ghost(&self) -> Option<&GhostRun> {
+        self.ghost.as_ref().filter(|g| g.racing())
+    }
+
+    /// The last gate's time against the ghost while it is shown, ticks
+    /// (negative is ahead of it).
+    pub fn ghost_note(&self) -> Option<i64> {
+        let (d, until) = self.ghost_note?;
+        let tick = self.run.as_ref()?.race().tick();
+        (tick < until).then_some(d)
     }
 
     /// The buttons drawn last frame: what this frame's touches hit.
@@ -348,12 +411,7 @@ impl Game {
             }
             Mode::Racing => self.racing(delta, i, confirm, pause),
             Mode::Fork => self.forking(delta, i, confirm),
-            Mode::Results => {
-                if confirm || self.touch.pressed(Action::Continue) {
-                    self.sfx.push(Sfx::Click);
-                    self.go_to_title();
-                }
-            }
+            Mode::Results => self.results(i, confirm),
         }
     }
 
@@ -370,6 +428,31 @@ impl Game {
         }
         self.fx.push(Effect::Redraw);
         std::mem::take(&mut self.fx)
+    }
+
+    fn results(&mut self, i: &Intents, confirm: bool) {
+        let any = |keys: &[_], pads: &[_]| i.events.iter().any(|e| pressed(e, keys, pads));
+        let sel = self.results_sel;
+        if any(bind::MENU_UP, bind::PAD_UP) {
+            self.results_sel = 1;
+        }
+        if any(bind::MENU_DOWN, bind::PAD_DOWN) {
+            self.results_sel = 0;
+        }
+        if self.results_sel != sel {
+            self.sfx.push(Sfx::Click);
+        }
+        let retry = self.touch.pressed(Action::Retry) || (confirm && self.results_sel == 1);
+        if retry && self.demo.is_none() {
+            self.sfx.push(Sfx::Click);
+            let (seed, attempt) = (self.seed, self.attempt + 1);
+            self.go_to_title();
+            self.start_seed(seed, false);
+            self.attempt = attempt;
+        } else if confirm || self.touch.pressed(Action::Continue) {
+            self.sfx.push(Sfx::Click);
+            self.go_to_title();
+        }
     }
 
     fn back(&mut self) {
@@ -398,8 +481,12 @@ impl Game {
             ending,
             replay: Replay::of(run),
         };
+        let name = match self.attempt {
+            0 => format!("run-{:016x}.txt", f.replay.run_seed),
+            n => format!("run-{:016x}-{n}.txt", f.replay.run_seed),
+        };
         self.fx.push(Effect::SaveRun {
-            name: format!("run-{:016x}.txt", f.replay.run_seed),
+            name,
             text: encode_run(&f),
         });
     }
@@ -410,6 +497,9 @@ impl Game {
         self.demo = None;
         self.run = None;
         self.watch = None;
+        self.ghost = None;
+        self.ghost_note = None;
+        self.results_sel = 0;
         self.touch.release_all();
         self.held = Held::default();
         self.fx.push(Effect::KeepScreenOn(false));
@@ -417,8 +507,16 @@ impl Game {
     }
 
     fn start(&mut self, entropy: u64, demo: bool) {
-        self.seed = mix64(entropy).max(1);
-        self.builder.request((self.seed, 0, 0));
+        self.attempt = 0;
+        self.start_seed(mix64(entropy).max(1), demo);
+    }
+
+    /// Start a run of `seed`: a new one, or the same again (RETRY SEED; a
+    /// daily seed later). The same seed is the same tracks, so whatever was
+    /// already built is used at once.
+    pub fn start_seed(&mut self, seed: u64, demo: bool) {
+        self.seed = seed;
+        self.request((seed, 0, 0));
         self.mode = Mode::Building;
         self.demo = demo.then_some(Demo {
             bot: None,
@@ -434,15 +532,22 @@ impl Game {
         let track = run.race().track().clone();
         self.watch = Some(Watch::new(run.race()));
         self.decor = Decor::new(&track);
-        if index + 1 < TRACKS {
-            for b in 0..2 {
-                self.builder.request((self.seed, index + 1, b));
-            }
-        }
+        let key = (self.seed, index, run.branch());
+        self.ghost = match (&self.demo, self.ghosts.get(key)) {
+            (None, Some(g)) => GhostRun::new(track.clone(), g),
+            _ => None,
+        };
+        self.ghost_note = None;
+        self.gates_seen = 0;
         if let Some(d) = &mut self.demo {
             let plan = HumanPlan::new(&track, run.race().params());
             d.bot = Some(HumanBot::new(plan, substream(self.seed, index as u64)));
             d.fork_wait = DEMO_FORK_WAIT;
+        }
+        if index + 1 < TRACKS {
+            for b in 0..2 {
+                self.request((self.seed, index + 1, b));
+            }
         }
         self.mode = Mode::Racing;
         self.paused = false;
@@ -450,6 +555,29 @@ impl Game {
         self.touch.release_all();
         self.fx.push(Effect::KeepScreenOn(true));
         self.fx.push(Effect::Redraw);
+    }
+
+    /// Ask for a track unless it is already built.
+    fn request(&mut self, key: Key) {
+        if !self.built(key) {
+            self.builder.request(key);
+        }
+    }
+
+    /// The player finished the track: keep the race as its ghost if it is
+    /// the best there, and have the store written if so. Never for DEMO.
+    fn record_best(&mut self) {
+        let (Some(run), None) = (&self.run, &self.demo) else {
+            return;
+        };
+        let Some(g) = Ghost::of(run.race(), run.loadout()) else {
+            return;
+        };
+        if self.ghosts.offer((self.seed, run.index(), run.branch()), g) {
+            self.fx.push(Effect::SaveGhosts {
+                text: self.ghosts.encode(racer_sim::SIM_EPOCH),
+            });
+        }
     }
 
     /// Touch and every other device, combined.
@@ -492,6 +620,19 @@ impl Game {
                 None => self.ramp.shape(player, controls.left != controls.right),
             };
             run.step(input);
+            // The ghost takes its tick beside the player's, from its own log.
+            if let Some(g) = &mut self.ghost {
+                g.step();
+            }
+            let splits = run.race().splits();
+            while self.gates_seen < splits.len() {
+                let k = self.gates_seen;
+                self.gates_seen += 1;
+                if let Some(at) = self.ghost.as_ref().and_then(|g| g.split(k)) {
+                    let d = i64::from(splits[k]) - i64::from(at);
+                    self.ghost_note = Some((d, splits[k] + GHOST_NOTE_TICKS));
+                }
+            }
             if let Some(w) = &mut self.watch {
                 w.step(run.race(), &mut self.sfx);
             }
@@ -513,6 +654,10 @@ impl Game {
                 drift: controls.drift,
             }
         };
+        if matches!(run.phase(), RunPhase::Forking | RunPhase::Won) {
+            self.record_best();
+        }
+        let Some(run) = &self.run else { return };
         match run.phase() {
             RunPhase::Racing => {}
             RunPhase::Forking => {
@@ -593,7 +738,7 @@ fn held_of(i: Input) -> Held {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::builder::Inline;
+    use crate::builder::{Inline, Key};
     use crate::input::Key as K;
     use racer_sim::track::fixtures;
 
@@ -882,6 +1027,242 @@ mod tests {
         let fx = frame(&mut g, vec![Event::Key(K::Space)], vec![]);
         assert_eq!(sounds(&fx), vec![Sfx::Click]);
         assert!(fx.contains(&Effect::Music(true)));
+    }
+
+    /// Track 1 is two gates of straight road with time to spare; every
+    /// later track runs out of time at once. One finish, then the results.
+    fn one_finish() -> Game {
+        Game::new(Box::new(Inline::new(|k: Key| {
+            let mut b = racer_sim::track::Builder::new();
+            b.straight(60)
+                .checkpoint()
+                .straight(60)
+                .checkpoint()
+                .straight(20);
+            let mut t = b.build();
+            let allot = if k.1 == 0 { 30.0 } else { 1.0 };
+            t.set_allotments(vec![racer_sim::ticks(allot); 2]);
+            t
+        })))
+    }
+
+    fn ghosts_saved(fx: &[Effect]) -> Option<String> {
+        fx.iter().rev().find_map(|e| match e {
+            Effect::SaveGhosts { text } => Some(text.clone()),
+            _ => None,
+        })
+    }
+
+    fn run_names(fx: &[Effect]) -> Vec<String> {
+        fx.iter()
+            .filter_map(|e| match e {
+                Effect::SaveRun { name, .. } => Some(name.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Weave and brake for the first second, then straight: a slower drive
+    /// than a ghost that went straight all the way.
+    fn weave(n: usize) -> Vec<K> {
+        match n {
+            0..=20 => vec![K::Right],
+            21..=45 => vec![K::Left],
+            46..=60 => vec![K::Down],
+            _ => vec![],
+        }
+    }
+
+    /// Finish track 1 (keeping its ghost), run out of time on track 2 and
+    /// return the effects.
+    fn finish_then_lose(g: &mut Game, keys: impl Fn(usize) -> Vec<K>) -> Vec<Effect> {
+        let mut fx = Vec::new();
+        let mut n = 0;
+        while g.mode == Mode::Racing {
+            fx.extend(frame(g, vec![], keys(n)));
+            n += 1;
+        }
+        assert_eq!(g.mode, Mode::Fork);
+        fx.extend(frame(g, vec![Event::Key(K::Enter)], vec![]));
+        while g.mode == Mode::Racing {
+            fx.extend(frame(g, vec![], vec![]));
+        }
+        assert_eq!(g.mode, Mode::Results);
+        fx
+    }
+
+    /// RETRY SEED from the results, by keys.
+    fn retry(g: &mut Game) {
+        frame(g, vec![Event::Key(K::Up)], vec![]);
+        assert_eq!(g.results_sel, 1);
+        frame(g, vec![Event::Key(K::Enter)], vec![]);
+        frame(g, vec![], vec![]);
+        assert_eq!(g.mode, Mode::Racing, "the track is already built");
+    }
+
+    #[test]
+    fn a_finish_is_kept_as_the_tracks_ghost_and_only_a_faster_one_replaces_it() {
+        let mut g = one_finish();
+        start(&mut g);
+        let fx = finish_then_lose(&mut g, weave);
+        let text = ghosts_saved(&fx).expect("the finish was kept");
+        assert!(text.starts_with("racer-ghosts 1\ng 1 "), "{text}");
+        let key = (g.seed, 0, 0);
+        let first = g.ghosts().get(key).unwrap().ticks;
+        assert_eq!(first, g.run.as_ref().unwrap().results()[0].ticks);
+        assert_eq!(g.ghosts().len(), 1, "a lost track keeps nothing");
+        // The same weave again: a tie, nothing written.
+        retry(&mut g);
+        let fx = finish_then_lose(&mut g, weave);
+        assert_eq!(ghosts_saved(&fx), None);
+        // Straight down the road is quicker: replaced. Retry by touch.
+        g.set_buttons(vec![Button {
+            rect: crate::layout::Rect::new(0, 0, 180, 40),
+            action: Action::Retry,
+        }]);
+        let tap = Event::FingerDown {
+            index: 0,
+            x: 5.0,
+            y: 5.0,
+        };
+        frame(&mut g, vec![tap], vec![]);
+        frame(&mut g, vec![Event::FingerUp { index: 0 }], vec![]);
+        assert_eq!(g.mode, Mode::Racing);
+        let fx = finish_then_lose(&mut g, |_| vec![]);
+        assert!(ghosts_saved(&fx).is_some());
+        assert!(g.ghosts().get(key).unwrap().ticks < first);
+        assert_eq!(
+            run_names(&fx),
+            vec![format!("run-{:016x}-2.txt", g.seed)],
+            "a retry's run file does not overwrite the first attempt's"
+        );
+    }
+
+    #[test]
+    fn retry_seed_races_the_same_tracks_again() {
+        let mut g = game(2.0);
+        start(&mut g);
+        let seed = g.seed;
+        let first = g.run.as_ref().unwrap().race().track().clone();
+        while g.mode == Mode::Racing {
+            frame(&mut g, vec![], vec![]);
+        }
+        assert_eq!(g.mode, Mode::Results);
+        retry(&mut g);
+        assert_eq!(g.seed, seed);
+        let run = g.run.as_ref().unwrap();
+        assert_eq!(run.run_seed(), seed);
+        assert!(
+            Arc::ptr_eq(run.race().track(), &first),
+            "the very track, from the cache"
+        );
+        assert!(g.ghost().is_none(), "nothing was finished: no ghost");
+        // And with the real generator: the same seed builds the same track.
+        use racer_sim::run::{Generate, Tracks};
+        let a = Generate.track(seed, 0, 0);
+        let b = Generate.track(seed, 0, 0);
+        assert_eq!(*a, *b);
+    }
+
+    #[test]
+    fn the_ghost_races_its_best_beside_the_player_and_reports_each_gate() {
+        let mut g = one_finish();
+        start(&mut g);
+        finish_then_lose(&mut g, |_| vec![]);
+        let best = g.ghosts().get((g.seed, 0, 0)).unwrap().clone();
+        retry(&mut g);
+        assert!(g.ghost().is_some(), "a stored best: a ghost");
+        // Slower this time: the ghost pulls ahead.
+        let mut n = 0;
+        let mut notes = Vec::new();
+        let mut ghost_done_at = None;
+        while g.mode == Mode::Racing {
+            frame(&mut g, vec![], weave(n));
+            n += 1;
+            let race = g.run.as_ref().unwrap().race();
+            if let (Some(gh), true) = (g.ghost(), race.tick() > 120) {
+                assert!(gh.car().z > race.car().z, "the faster ghost leads");
+            }
+            if g.ghost().is_none() && ghost_done_at.is_none() {
+                ghost_done_at = Some(race.tick());
+            }
+            if let Some(d) = g.ghost_note() {
+                notes.push(d);
+            }
+        }
+        // It finished on its stored tick (seen at the end of that frame),
+        // and then was gone.
+        let done = ghost_done_at.expect("the ghost finished first");
+        assert!(
+            done >= best.ticks && done < best.ticks + 3,
+            "{done} vs {}",
+            best.ticks
+        );
+        assert!(!notes.is_empty(), "the first gate's delta was shown");
+        assert!(notes.iter().all(|&d| d > 0), "behind the ghost: {notes:?}");
+        // The note is the player's split minus the ghost's.
+        let run = g.run.as_ref().unwrap();
+        let (probe, _) = racer_sim::replay::replay_race(
+            run.race().track().clone(),
+            best.loadout.params(),
+            &best.log,
+        )
+        .unwrap();
+        let want = i64::from(run.race().splits()[0]) - i64::from(probe.splits()[0]);
+        assert_eq!(notes[0], want);
+    }
+
+    #[test]
+    fn a_ghost_never_changes_the_players_run() {
+        use racer_sim::run::state_hash;
+        let mut first = one_finish();
+        start(&mut first);
+        let fx = finish_then_lose(&mut first, |_| vec![]);
+        let text = ghosts_saved(&fx).unwrap();
+        let mut with = one_finish();
+        let mut without = one_finish();
+        with.load_ghosts(&text);
+        start(&mut with);
+        start(&mut without);
+        assert_eq!(with.seed, first.seed);
+        assert!(with.ghost().is_some() && without.ghost().is_none());
+        let mut n = 0;
+        while with.mode == Mode::Racing {
+            frame(&mut with, vec![], weave(n));
+            frame(&mut without, vec![], weave(n));
+            n += 1;
+            let (a, b) = (with.run.as_ref().unwrap(), without.run.as_ref().unwrap());
+            assert_eq!(state_hash(a), state_hash(b), "frame {n}");
+        }
+        assert_eq!(without.mode, Mode::Fork);
+    }
+
+    #[test]
+    fn demo_neither_keeps_nor_races_ghosts() {
+        // The ghost of a straight drive of the DEMO's own first track.
+        let mut probe = one_finish();
+        start(&mut probe);
+        let text = ghosts_saved(&finish_then_lose(&mut probe, |_| vec![])).unwrap();
+        let mut g = one_finish();
+        g.load_ghosts(&text);
+        g.set_buttons(vec![Button {
+            rect: crate::layout::Rect::new(0, 0, 180, 400),
+            action: Action::Demo,
+        }]);
+        let down = Event::FingerDown {
+            index: 0,
+            x: 5.0,
+            y: 5.0,
+        };
+        let mut fx = frame(&mut g, vec![down], vec![]);
+        fx.extend(frame(&mut g, vec![Event::FingerUp { index: 0 }], vec![]));
+        assert!(g.demo() && g.mode == Mode::Racing);
+        assert_eq!(g.seed, probe.seed);
+        assert!(g.ghost().is_none());
+        while g.mode == Mode::Racing {
+            fx.extend(frame(&mut g, vec![], vec![]));
+        }
+        assert_eq!(ghosts_saved(&fx), None);
     }
 
     #[test]

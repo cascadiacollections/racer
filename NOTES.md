@@ -330,3 +330,34 @@ each other with `adb install -r` as long as the key stays the same.
 - A headless `godot --quit-after` run reports an `AudioStreamPlaybackWAV`
   leaked at exit while the music plays; a bare GDScript player does the same,
   so it is Godot's dummy audio driver at quit, not the game.
+
+## Ghost of your best run, and RETRY SEED (2026-10-18)
+
+- A track is its key `(run_seed, index, branch)`, so a ghost can only exist on
+  a track the player has finished before: in practice a retry. RETRY SEED on
+  the results screen (Up then confirm, or the button) starts the same seed
+  again; the cached tracks start it at once. `Game::start_seed` is the hook a
+  daily seed will use. A retry's run file is `run-<seed>-<n>.txt`, so it no
+  longer overwrites the first attempt's.
+- `racer_sim::ghost`: when the player (never DEMO) finishes a track, the race's
+  own log, the loadout and the finishing tick go to a `GhostStore` if faster
+  than the stored best (a tie keeps the old one); the adapter writes it to
+  `user://ghosts/ghosts.txt` (app-private, not the runs directory) via a
+  temporary file and a rename. Format: a `racer-ghosts 1` header, then one
+  `g <epoch> <seed 0x…> <index> <branch> <stacks> <ticks> v1 <log…>` line per
+  key (`<stacks>` one digit per upgrade, `Upgrade::ALL` order). Lines from
+  another `SIM_EPOCH` and lines that do not parse are dropped.
+- Racing a track with a stored best runs a second `Race` (`GhostRun`) one tick
+  per player tick, fed exactly as `replay::feed` would. It is replayed in full
+  once first and refused unless it finishes on its stored tick, which also
+  gives its gate splits up front for the HUD's `GHOST +1.2S` (green when
+  ahead, red behind, two seconds after each gate). It only reads the player's
+  race; `a_ghost_never_changes_the_players_run` compares state hashes every
+  frame with and without one.
+- Drawn as a pale (ICE/WATER/WHITE) traffic-sized car with every other pixel
+  cleared in a checkerboard, placed through the same projection as roadside
+  sprites: depth-sorted, crest-clipped, gone behind the camera and once it
+  has finished. It is true to scale, so a ghost more than ~15 m ahead is a
+  few pixels; if that reads too faintly on the phone, an outline or a
+  marker over it is the next step. Golden frame `ghost_ahead` added; the
+  `time_up` screen digest moved for the new button; no other golden changed.
