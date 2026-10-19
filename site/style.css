@@ -330,3 +330,29 @@ footer nav { display: grid; gap: .4rem; font-size: .88rem; }
 details { margin: 1rem 0; border: 1px solid var(--asphalt-lt); padding: 1rem; }
 summary { cursor: pointer; color: var(--yellow); }
 .license-text { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: .85rem; }
+
+/* ------------------------------------------------- seasonal and strips */
+.strip { margin: 2rem 0 1.5rem; }
+.strip img { width: 100%; height: auto; border: 1px solid var(--asphalt-lt); }
+.strip figcaption, .frame-grid figcaption { color: var(--ice); font-size: .8rem; margin-top: .4rem; }
+.halloween {
+  border: 1px solid color-mix(in srgb, var(--red) 60%, transparent);
+  background:
+    radial-gradient(700px 300px at 85% 0%, color-mix(in srgb, var(--red-dk) 45%, transparent), transparent 70%),
+    color-mix(in srgb, var(--ink) 85%, var(--red-dk));
+  padding: 1.5rem;
+}
+.spooky-kicker { color: var(--yellow); letter-spacing: .08em; font-size: .8rem; margin: 0; }
+.halloween-grid {
+  display: grid; grid-template-columns: minmax(0, 220px) minmax(0, 1fr);
+  gap: 1.5rem; align-items: start;
+}
+.halloween-grid img { width: 100%; height: auto; border: 1px solid var(--asphalt-lt); }
+.twin-list { margin: 0; padding-left: 1.1rem; }
+.twin-list li { margin: .35rem 0; }
+.twin-list b { color: var(--yellow); font-weight: normal; }
+@media (max-width: 760px) {
+  .halloween { padding: 1rem; }
+  .halloween-grid { grid-template-columns: minmax(0, 1fr); }
+  .halloween-grid figure { max-width: 240px; }
+}

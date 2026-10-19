@@ -12,7 +12,8 @@
 //! A scene carries its [`Biome`] (DESIGN §5.1): the frame is painted in the
 //! biome's palette, under its backdrop ([`crate::scenery`]), with its
 //! flora and posts. The road, its kerbs and surfaces, the cars, the HUD
-//! and the pad are drawn in the same indices everywhere.
+//! and the pad are drawn in the same indices everywhere. In a season
+//! (DESIGN §5.2) the scene's biome is painted as its twin ([`Look`]).
 
 use racer_sim::biome::Biome;
 use racer_sim::car::{Car, Drift, MINI_CHARGE, SPIN_TICKS, SUPER_CHARGE};
@@ -26,6 +27,7 @@ use crate::palette::*;
 use crate::project::{half_width, Camera, Placed, RoadView, Row, STRIPE_SEGS};
 use crate::raster::{Canvas, Sprite};
 use crate::scenery;
+use crate::season::{Look, Season};
 use crate::sprites::{Art, CarFrame, Steps, SPIN_FRAMES};
 
 /// How far ahead a drift-required corner is announced, metres.
@@ -64,6 +66,12 @@ pub struct RaceScene<'a> {
     pub ghost_note: Option<i64>,
     /// The scenery: the palette, backdrop and roadside things.
     pub biome: Biome,
+    /// The season (DESIGN §5.2): in one, the biome is painted as its twin.
+    /// Presentation only; [`Season::None`] unless the game says otherwise.
+    pub season: Season,
+    /// The presentation clock (30 steps a second) the scenery animates by:
+    /// the twins' bats. Never the sim's tick.
+    pub anim: u32,
 }
 
 impl<'a> RaceScene<'a> {
@@ -84,7 +92,15 @@ impl<'a> RaceScene<'a> {
             ghost: None,
             ghost_note: None,
             biome: Biome::of_track(index),
+            season: Season::None,
+            anim: 0,
         }
+    }
+
+    /// How the scene is painted: its biome, or the biome's twin in a
+    /// season.
+    pub fn look(&self) -> Look {
+        Look::of(self.biome, self.season)
     }
 
     /// Metres to the next drift-required corner within [`DRIFT_WARN`], if
@@ -334,10 +350,11 @@ fn road_rows(
     track: &Track,
     bg_shift: i32,
     gates: &[u32],
-    biome: Biome,
+    look: Look,
+    anim: u32,
 ) {
     let w = v.w;
-    let clouds = scenery::has_clouds(biome);
+    let clouds = scenery::has_clouds(look);
     for y in 0..v.h {
         match v.rows[y as usize] {
             Some(r) => road_row(c, y, w, &r, track, gates),
@@ -360,7 +377,7 @@ fn road_rows(
         }
     }
     // The horizon's layers, under any road that rises above it.
-    scenery::backdrop(c, v, bg_shift, biome);
+    scenery::backdrop(c, v, bg_shift, look, anim);
 }
 
 fn road_row(c: &mut Canvas, y: i32, w: i32, r: &Row, track: &Track, gates: &[u32]) {
@@ -459,7 +476,8 @@ fn stand<'a>(out: &mut Vec<Thing<'a>>, steps: &'a Steps, at: Option<Placed>, fli
 /// canvas to the scene's biome's palette first, so everything drawn over
 /// it this frame (the HUD, the pad, a menu) is in that palette too.
 pub fn road(c: &mut Canvas, l: &Layout, art: &Art, decor: &Decor, s: &RaceScene) -> RoadView {
-    c.set_palette(palette(s.biome));
+    let look = s.look();
+    c.set_palette(palette(look));
     let v = RoadView::build(
         s.track,
         s.car.z,
@@ -468,13 +486,21 @@ pub fn road(c: &mut Canvas, l: &Layout, art: &Art, decor: &Decor, s: &RaceScene)
         l.road.h,
         Camera::DEFAULT,
     );
-    road_rows(c, &v, s.track, s.bg_shift, s.track.checkpoints(), s.biome);
+    road_rows(
+        c,
+        &v,
+        s.track,
+        s.bg_shift,
+        s.track.checkpoints(),
+        look,
+        s.anim,
+    );
     let (from, to) = (v.base, v.base + v.cam.draw_segs as i64);
     let mut things: Vec<Thing> = Vec::new();
     for d in decor.between(from, to) {
         let at = v.place(d.seg as f64 * SEG_LEN + 0.01, d.x);
         match d.kind {
-            DecorKind::Tree => stand(&mut things, art.flora(s.biome), at, d.x < 0.0),
+            DecorKind::Tree => stand(&mut things, art.flora_at(look, d.seg), at, d.x < 0.0),
             DecorKind::ChevronRight => stand(&mut things, &art.chevron, at, false),
             DecorKind::ChevronLeft => stand(&mut things, &art.chevron, at, true),
         }
@@ -482,8 +508,8 @@ pub fn road(c: &mut Canvas, l: &Layout, art: &Art, decor: &Decor, s: &RaceScene)
     let (fa, ta) = (from.max(0) as usize, to.max(0) as usize);
     for o in s.track.objects_in(fa, ta) {
         let steps = match o.kind {
-            ObjectKind::Post => art.post_for(s.biome),
-            ObjectKind::Rock => &art.rock,
+            ObjectKind::Post => art.post_for(look),
+            ObjectKind::Rock => art.rock_for(look),
         };
         stand(&mut things, steps, v.place(o.z(), o.x()), false);
     }
@@ -725,13 +751,14 @@ pub fn ghost_delta(delta: i64) -> String {
     format!("GHOST {sign}{}.{}S", tenths / 10, tenths % 10)
 }
 
-/// The ink of good news on the HUD (the ghost behind you) in biome `b`: a
-/// green that reads on ink in that biome's palette.
-pub fn ahead_ink(b: Biome) -> u8 {
-    match b {
-        Biome::Meadow => GRASS_LT,
-        Biome::Coast | Biome::Alpine | Biome::Desert => HILLS,
-        Biome::Night => ICE,
+/// The ink of good news on the HUD (the ghost behind you) in look `b`: a
+/// green that reads on ink in that biome's palette (a twin's: the pale
+/// blue, as at night).
+pub fn ahead_ink(b: impl Into<Look>) -> u8 {
+    match b.into() {
+        Look::Meadow => GRASS_LT,
+        Look::Coast | Look::Alpine | Look::Desert => HILLS,
+        _ => ICE,
     }
 }
 
@@ -798,7 +825,7 @@ pub fn hud(c: &mut Canvas, l: &Layout, s: &RaceScene) {
     if let Some(d) = s.ghost_note {
         let text = ghost_delta(d);
         let w = crate::font::small_width(&text) as i32;
-        let ink = if d <= 0 { ahead_ink(s.biome) } else { RED };
+        let ink = if d <= 0 { ahead_ink(s.look()) } else { RED };
         c.rect(l.road.w - w - 5, 12, w + 4, 9, INK);
         c.text(l.road.w - w - 3, 14, &text, ink, 1);
     }
@@ -904,6 +931,8 @@ pub(crate) mod tests {
             ghost: None,
             ghost_note: None,
             biome: Biome::Meadow,
+            season: Season::None,
+            anim: 0,
         }
     }
 
@@ -1033,7 +1062,7 @@ pub(crate) mod tests {
 
     #[test]
     fn the_good_news_ink_reads_on_the_hud_in_every_biome() {
-        for b in Biome::ALL {
+        for b in Look::ALL {
             let p = palette(b);
             let ink = p[ahead_ink(b) as usize];
             assert!(contrast(ink, p[INK as usize]) >= 4.5, "{b:?}");
@@ -1381,7 +1410,31 @@ pub(crate) mod tests {
         for b in &Biome::ALL[1..] {
             out.push((biome_scene_name(*b), draw(&biome_scene(&show, *b), 360)));
         }
+        // Each biome's Halloween twin (DESIGN §5.2), the same scene with
+        // the season on and the bats mid-flight.
+        for b in Biome::ALL {
+            out.push((twin_scene_name(b), draw(&twin_scene(&show, b), 360)));
+        }
         out
+    }
+
+    /// The golden scene of biome `b`'s Halloween twin.
+    pub(crate) fn twin_scene(show: &Track, b: Biome) -> RaceScene<'_> {
+        let mut s = biome_scene(show, b);
+        s.season = Season::Halloween;
+        s.anim = 90;
+        s
+    }
+
+    /// Its name among the golden frames.
+    pub(crate) fn twin_scene_name(b: Biome) -> &'static str {
+        match b {
+            Biome::Meadow => "twin_pumpkin_patch",
+            Biome::Coast => "twin_ghost_cove",
+            Biome::Alpine => "twin_haunted_pines",
+            Biome::Desert => "twin_blood_moon_mesa",
+            Biome::Night => "twin_monster_city",
+        }
     }
 
     /// The golden scene of biome `b`.
@@ -1415,19 +1468,24 @@ pub(crate) mod tests {
         let art = Art::new();
         let mut c = Canvas::new(l.w, l.h);
         let n = 4000;
-        for biome in Biome::ALL {
-            let decor = Decor::new(&t, biome);
-            let mut s = scene(&t, 20.0 * SEG_LEN, 0.5, 1);
-            s.biome = biome;
-            let start = std::time::Instant::now();
-            for i in 0..n {
-                s.car.z = 20.0 * SEG_LEN + (i % 400) as f64 * 0.5;
-                s.bg_shift = i / 4;
-                race_frame(&mut c, &l, &art, &decor, &s, Held::default());
+        for season in [Season::None, Season::Halloween] {
+            for biome in Biome::ALL {
+                let decor = Decor::new(&t, biome);
+                let mut s = scene(&t, 20.0 * SEG_LEN, 0.5, 1);
+                s.biome = biome;
+                s.season = season;
+                let start = std::time::Instant::now();
+                for i in 0..n {
+                    s.car.z = 20.0 * SEG_LEN + (i % 400) as f64 * 0.5;
+                    s.bg_shift = i / 4;
+                    s.anim = i as u32;
+                    race_frame(&mut c, &l, &art, &decor, &s, Held::default());
+                }
+                let us = start.elapsed().as_secs_f64() * 1e6 / n as f64;
+                let look = s.look();
+                println!("raster_bench {look:?}: {us:.1} us per frame ({n} frames)");
+                assert!(c.palette_only());
             }
-            let us = start.elapsed().as_secs_f64() * 1e6 / n as f64;
-            println!("raster_bench {biome:?}: {us:.1} us per frame ({n} frames)");
-            assert!(c.palette_only());
         }
     }
 

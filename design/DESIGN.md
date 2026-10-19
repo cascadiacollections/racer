@@ -360,6 +360,57 @@ morning meadow to a city at night.
   Same sizes; collision is the sim's and unchanged. Gravel, ice and
   puddles keep their fixed colours everywhere.
 
+### 5.2 Seasons *(built, October 2026)*
+
+A **season** is a stretch of the calendar when the game dresses up
+(`racer_godot::season::Season`). One so far: **HALLOWEEN, October 19 to
+November 1 inclusive, every year.**
+
+- **When.** Judged by the same UTC day the daily run uses
+  (`Intents::today`, §1.4), so it starts and ends at 00:00 UTC everywhere.
+  `Season::window` gives `(month, day)` bounds (a window may wrap the new
+  year); `Season::on(day)` picks the season. No day known (the tests'
+  scenes, before the node's first frame) is no season.
+- **Override.** `--racer-season halloween|none` (Godot user args, like
+  `--racer-layout`) forces it on or off whatever the date, for testing and
+  screenshots.
+- **What it changes.** Every biome is painted as its *twin* (a `Look`):
+  MEADOW → **PUMPKIN PATCH** (stubble fields at dusk, a low harvest moon,
+  a pumpkin row, scarecrows and the odd dead tree), COAST → **GHOST COVE**
+  (a black sea in fog bands, a shipwreck, a pale moon, dead trees),
+  ALPINE → **HAUNTED PINES** (dark peaks under a cold moon, dead black
+  pines in mist on moonlit snow), DESERT DUSK → **BLOOD MOON MESA** (a huge
+  red moon behind black mesas, a purple-red sky, withered cacti with a
+  crow), NIGHT CITY → **MONSTER CITY** (orange windows, a crooked tower
+  with a green window, a green glow, green street lights). Every twin has
+  a few bats: two-frame 7×3 pixel maps drifting with half the sky's
+  parallax, flapping by a presentation clock (30 steps a second of the
+  app's clock), never by sim state. Marker posts become jack-o'-lanterns
+  on stakes; rocks become pumpkins (PUMPKIN PATCH, BLOOD MOON) or a
+  gravestone and cross; same sprite sizes, so the sim's footprints are
+  untouched. The title shows HAPPY HALLOWEEN between two flickering
+  jack-o'-lanterns, the rolling road and its name are twins, and the fork
+  cards name the twin.
+- **Sound.** In season the title plays its own loop (D minor, a
+  theremin-like lead with vibrato over a plodding bass and a tubular
+  bell), the gate chime, time up and the win are spooky variants, and a
+  quiet wind-and-moan loop sits under the engine while racing. All are
+  made by `tools/gen_audio.py` like the rest (checked by `just
+  check-audio`); DEMO stays silent.
+- **Palette rule.** Each twin is one more 16-colour table changing only
+  the six scenery indices (grass ×2, sky ×2, hills, brown); oranges are
+  red and yellow side by side (dithering, never a new colour). HUD, road,
+  kerbs, hazards, cars and the ghost keep their fixed indices; the twins
+  pass the same distinct-colour, WCAG and road-versus-verge tests as the
+  biomes, plus a test that each twin changes exactly the scenery indices
+  of its biome.
+- **Presentation only.** The season is not stored anywhere: not in a
+  layout, a code, a proof stamp, a ghost, the daily record or a run file.
+  A layout's biome is shown as its twin during the season and as itself
+  after. No `SIM_EPOCH` bump; golden runs, batch and the determinism
+  digest are unchanged; the render goldens without a season are byte for
+  byte the same.
+
 ## 6. Architecture
 
 ```

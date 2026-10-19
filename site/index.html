@@ -30,6 +30,8 @@
     <span>RACER</span>
   </a>
   <nav aria-label="Sections">
+    <a href="#halloween">Halloween</a>
+    <a href="#new">What's in it</a>
     <a href="#proven">Proven roads</a>
     <a href="#play">How it plays</a>
     <a href="#frames">Frames</a>
@@ -60,6 +62,7 @@
     <ul class="badges" aria-label="At a glance">
       <li>Every road proven</li>
       <li>180 px wide, 16 colours</li>
+      <li>Daily run · track editor</li>
       <li>Deterministic Rust sim</li>
       <li>Godot 4.7.2</li>
     </ul>
@@ -73,6 +76,109 @@
     <p class="fineprint">"racer" is a working codename: the game has no name
       yet. Android only for now, sideloaded, and not on any store. The source
       and the dev build need access to the GitHub repository.</p>
+  </div>
+</section>
+
+<!-- --------------------------------------------------------- halloween -->
+<section id="halloween" class="halloween" aria-labelledby="halloween-h">
+  <p class="kicker spooky-kicker">SEASONAL · OCT 19 – NOV 1 · EVERY YEAR</p>
+  <h2 id="halloween-h">Halloween season</h2>
+  <p class="lede">From October 19 to November 1 (by the same UTC day the
+    daily run uses) every biome turns into its spooky twin. The title says
+    HAPPY HALLOWEEN between two jack-o'-lanterns, bats cross a big moon, and
+    the roadside is scarecrows, dead trees, gravestones and pumpkins. Only
+    the paint changes: the tracks, the timers, the daily, ghosts and share
+    codes are exactly the same as the rest of the year.</p>
+  <figure class="strip">
+    <img src="assets/twins.png" alt="The five Halloween twins side by side: PUMPKIN PATCH under a low harvest moon, GHOST COVE with a pale moon over a black sea, HAUNTED PINES with dead black pines below moonlit peaks, BLOOD MOON MESA with a huge red moon behind black mesas, and MONSTER CITY with orange windows, a crooked tower and a green glow." class="px" width="1816" height="492" loading="lazy">
+    <figcaption>PUMPKIN PATCH · GHOST COVE · HAUNTED PINES · BLOOD MOON MESA · MONSTER CITY</figcaption>
+  </figure>
+  <div class="halloween-grid">
+    <figure>
+      <img src="assets/frames/screen_title_halloween.png" alt="The title screen in the Halloween season: HAPPY HALLOWEEN between two jack-o'-lanterns over the RACER banner, the road behind it in the pumpkin patch under an orange sky." class="px" width="360" height="720" loading="lazy">
+      <figcaption>The title in season.</figcaption>
+    </figure>
+    <ul class="twin-list">
+      <li><b>PUMPKIN PATCH</b> (meadow): stubble fields at dusk, a harvest moon, a row of pumpkins, scarecrows.</li>
+      <li><b>GHOST COVE</b> (coast): a black sea in fog bands, a shipwreck, a pale moon, dead trees on the dunes.</li>
+      <li><b>HAUNTED PINES</b> (alpine): dead black pines in mist on moonlit snow under a cold moon.</li>
+      <li><b>BLOOD MOON MESA</b> (desert dusk): a huge red moon behind black mesas, withered cacti with a crow.</li>
+      <li><b>MONSTER CITY</b> (night city): orange windows, a crooked tower with a green window, green street lights.</li>
+      <li class="small">Each twin is one more sixteen-colour table that changes only the six scenery colours; the road, the car, the HUD and the hazards keep theirs, so everything still reads the same.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- --------------------------------------------------------------- new -->
+<section id="new" aria-labelledby="new-h">
+  <h2 id="new-h">What's in the build</h2>
+  <div class="cards">
+    <article class="card">
+      <h3>DAILY run</h3>
+      <p>One run a day, the same for everyone: its seed is a hash of the UTC
+        day, so it turns over at midnight UTC everywhere. The game builds all
+        nine of the day's tracks in the background while the title is up, so
+        DAILY starts at once; the title keeps today's tries and best.</p>
+      <code>seed = mix64(tag, UTC day)</code>
+    </article>
+    <article class="card">
+      <h3>Your ghost, and RETRY SEED</h3>
+      <p>Finish a track and your fastest drive becomes a ghost: a pale,
+        see-through copy of your car replayed from its input log, with your
+        time against it at every gate. RETRY SEED races the same five roads
+        again; the daily's ghosts work the same way.</p>
+      <code>GHOST -0.8S</code>
+    </article>
+    <article class="card">
+      <h3>TRACKS and the editor</h3>
+      <p>Four bundled courses, your saved layouts and an in-game editor: a
+        map and an elevation strip, bends, hills, width, surfaces, drift
+        corners, cars and gates. PROVE runs the same bots on your layout;
+        a proven one races timed and shares as an <code>RL…</code> code,
+        a draft as <code>RD…</code>. FROM SEED forks any generated track.</p>
+      <code>FIRST LIGHT · RIDGE RUN · GRAVEL PASS · LONG DUSK</code>
+    </article>
+    <article class="card">
+      <h3>Five biomes</h3>
+      <p>A run is a day on the road: MEADOW, COAST, ALPINE, DESERT DUSK and
+        NIGHT CITY, one per track, each with its own sixteen colours, horizon
+        layers and roadside flora. Scenery only: no biome changes how a
+        track drives.</p>
+      <code>6 scenery colours change · 10 stay fixed</code>
+    </article>
+    <article class="card">
+      <h3>Sound and music</h3>
+      <p>Engine, tyres, gates, boosts, spins, the last five seconds and the
+        title music, all generated by a standard-library Python script with
+        no samples, byte for byte reproducible and checked in CI.</p>
+      <code>just gen-audio</code>
+    </article>
+    <article class="card">
+      <h3>Procedural sprites</h3>
+      <p>Every sprite is drawn in code at startup. Cars are small solid
+        models lit from the upper left and dithered between tones; the
+        player's hatch has lean, drift and spin frames with brake lamps;
+        traffic comes as a hatchback, a van and a pickup.</p>
+      <code>Art::new ≈ 6.5 ms, once</code>
+    </article>
+  </div>
+  <figure class="strip">
+    <img src="assets/biomes.png" alt="The five biomes side by side: a green meadow with clouds, a coast with a sea horizon and palms, snowy alpine peaks with pines, a desert dusk with mesas and a setting sun, and a night city skyline with lit windows." class="px" width="1816" height="492" loading="lazy">
+    <figcaption>MEADOW · COAST · ALPINE · DESERT DUSK · NIGHT CITY</figcaption>
+  </figure>
+  <div class="frame-grid">
+    <figure>
+      <img src="assets/frames/screen_title_daily.png" alt="The title screen with today's daily run: its date and the best of today's tries under the RACER banner." class="px" width="360" height="720" loading="lazy">
+      <figcaption>The title with today's daily.</figcaption>
+    </figure>
+    <figure>
+      <img src="assets/frames/screen_tracks.png" alt="The TRACKS list: the four bundled courses, each marked proven, and a saved layout." class="px" width="360" height="720" loading="lazy">
+      <figcaption>TRACKS: courses and your layouts.</figcaption>
+    </figure>
+    <figure>
+      <img src="assets/frames/screen_editor_bend.png" alt="The track editor: a map of the course with the selected run highlighted, an elevation strip below it, and the tool buttons." class="px" width="360" height="720" loading="lazy">
+      <figcaption>The editor: map, elevation, tools.</figcaption>
+    </figure>
   </div>
 </section>
 
@@ -199,9 +305,10 @@
   </div>
   <figure class="palette">
     <img src="assets/palette_16.png" alt="The sixteen colours: ink, two asphalt greys, white, red, dark red, two grass greens, two sky blues, hill blue, gravel, ice, water blue, yellow and brown." class="px" width="768" height="80" loading="lazy">
-    <figcaption>Sixteen colours, fixed. Every pixel the game draws is one of
-      them, and the tests hold each rendered frame to that. The art is
-      placeholder procedural pixel art, drawn in code.</figcaption>
+    <figcaption>The meadow's sixteen colours. Every pixel the game draws is
+      one of a table like this: each biome, and each Halloween twin, swaps
+      only the six scenery colours, and the tests hold each rendered frame to
+      its table. The art is procedural pixel art, drawn in code.</figcaption>
   </figure>
 </section>
 
@@ -249,7 +356,7 @@
   <h2 id="dev-h">Dev build</h2>
   <p class="small">Every push to <code>main</code> replaces the rolling
     <code>dev</code> prerelease with a new APK. It is a prototype: expect
-    rough edges and no sound yet. GitHub sign-in and repository access are
+    rough edges. GitHub sign-in and repository access are
     required; there is no store release.</p>
   <div class="cards dl">
     <article class="card">
@@ -336,9 +443,10 @@ just balance   # build and prove 1,800 tracks</code></pre>
   <ul class="checks">
     <li class="yes">The simulation, the generator and the solver are built and gated in CI.</li>
     <li class="yes">It is playable on a phone from the first track to the fifth, with forks, upgrades, pause and a demo mode.</li>
+    <li class="yes">A daily run, ghosts, an in-game track editor with share codes, five biomes, sound and music.</li>
     <li class="yes">CI builds a signed, attested APK from every push to <code>main</code>.</li>
     <li class="no">No name yet: "racer" is a working codename.</li>
-    <li class="no">The art is placeholder pixel art drawn in code, and there is no sound yet.</li>
+    <li class="no">The art and sound are procedural first passes, drawn and generated in code; levels and looks are still being tuned on real phones.</li>
     <li class="no">Not on any store. Balance moves between builds; a run from an older sim epoch keeps its seed and nothing else.</li>
   </ul>
 </section>

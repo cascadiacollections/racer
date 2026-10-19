@@ -20,7 +20,7 @@ pub mod roadside;
 pub mod solid;
 pub mod traffic;
 
-use racer_sim::biome::Biome;
+use crate::season::Look;
 
 pub use car::{CarArt, CarFrame, CarSprite, Fx, SPIN_FRAMES};
 
@@ -123,6 +123,23 @@ pub struct Art {
     pub snow_post: Steps,
     /// NIGHT CITY's marker posts.
     pub city_post: Steps,
+    /// Halloween (DESIGN §5.2): every twin's marker posts, jack-o'-lanterns
+    /// on stakes.
+    pub lantern_post: Steps,
+    /// PUMPKIN PATCH's and BLOOD MOON MESA's rocks: a pile of pumpkins.
+    pub pumpkins: Steps,
+    /// The other twins' rocks: a gravestone and a cross.
+    pub gravestone: Steps,
+    /// PUMPKIN PATCH's flora.
+    pub scarecrow: Steps,
+    /// GHOST COVE's flora, and one in three of the pumpkin patch's.
+    pub dead_tree: Steps,
+    /// HAUNTED PINES' flora.
+    pub dead_pine: Steps,
+    /// BLOOD MOON MESA's flora.
+    pub withered_cactus: Steps,
+    /// MONSTER CITY's street lights.
+    pub green_lamp: Steps,
     /// Bend-warning boards; pointing right, mirrored for left.
     pub chevron: Steps,
     /// Traffic: every vehicle variant ([`traffic::VARIANTS`]).
@@ -149,6 +166,14 @@ impl Art {
             lamp: roadside::lamp(),
             snow_post: roadside::snow_post(),
             city_post: roadside::city_post(),
+            lantern_post: roadside::lantern_post(),
+            pumpkins: roadside::pumpkins(),
+            gravestone: roadside::gravestone(),
+            scarecrow: roadside::scarecrow(),
+            dead_tree: roadside::dead_tree(),
+            dead_pine: roadside::dead_pine(),
+            withered_cactus: roadside::withered_cactus(),
+            green_lamp: roadside::green_lamp(),
             chevron: roadside::chevron(),
             traffic: traffic::all(),
             ghost: Steps {
@@ -162,26 +187,52 @@ impl Art {
 }
 
 impl Art {
-    /// What stands beside a road in biome `b`: the decor that was the
-    /// meadow's trees.
-    pub fn flora(&self, b: Biome) -> &Steps {
-        match b {
-            Biome::Meadow => &self.tree,
-            Biome::Coast => &self.palm,
-            Biome::Alpine => &self.pine,
-            Biome::Desert => &self.cactus,
-            Biome::Night => &self.lamp,
+    /// What stands beside a road in look `b` (a biome or a twin): the
+    /// decor that was the meadow's trees.
+    pub fn flora(&self, b: impl Into<Look>) -> &Steps {
+        match b.into() {
+            Look::Meadow => &self.tree,
+            Look::Coast => &self.palm,
+            Look::Alpine => &self.pine,
+            Look::Desert => &self.cactus,
+            Look::Night => &self.lamp,
+            Look::Pumpkin => &self.scarecrow,
+            Look::GhostCove => &self.dead_tree,
+            Look::HauntedPines => &self.dead_pine,
+            Look::BloodMoon => &self.withered_cactus,
+            Look::MonsterCity => &self.green_lamp,
         }
     }
 
-    /// The marker posts (the sim's `ObjectKind::Post`) in biome `b`. Every
+    /// The flora of the decor on segment `seg`: [`Art::flora`], but one
+    /// pumpkin-patch scarecrow in three is a dead tree.
+    pub fn flora_at(&self, b: Look, seg: u32) -> &Steps {
+        if b == Look::Pumpkin && seg.is_multiple_of(3) {
+            &self.dead_tree
+        } else {
+            self.flora(b)
+        }
+    }
+
+    /// The marker posts (the sim's `ObjectKind::Post`) in look `b`. Every
     /// one is the same size: a post's footprint is the sim's, and only its
     /// paint changes.
-    pub fn post_for(&self, b: Biome) -> &Steps {
-        match b {
-            Biome::Alpine => &self.snow_post,
-            Biome::Night => &self.city_post,
+    pub fn post_for(&self, b: impl Into<Look>) -> &Steps {
+        match b.into() {
+            Look::Alpine => &self.snow_post,
+            Look::Night => &self.city_post,
+            l if l.spooky() => &self.lantern_post,
             _ => &self.post,
+        }
+    }
+
+    /// The rocks (the sim's `ObjectKind::Rock`) in look `b`, each the
+    /// size of the boulder: pumpkins or a gravestone in a twin.
+    pub fn rock_for(&self, b: impl Into<Look>) -> &Steps {
+        match b.into() {
+            Look::Pumpkin | Look::BloodMoon => &self.pumpkins,
+            l if l.spooky() => &self.gravestone,
+            _ => &self.rock,
         }
     }
 }
@@ -234,9 +285,14 @@ impl Art {
         }
         rows.push((meadow, ASPHALT_LT, self.ghost.sprites.iter().collect()));
         rows.push((meadow, ASPHALT_DK, self.ghost.sprites.iter().collect()));
-        for b in Biome::ALL {
+        for b in Look::ALL {
             let p = crate::palette::palette(b);
-            for k in [self.flora(b), self.post_for(b), &self.rock, &self.chevron] {
+            for k in [
+                self.flora(b),
+                self.post_for(b),
+                self.rock_for(b),
+                &self.chevron,
+            ] {
                 rows.push((p, GRASS_LT, k.sprites.iter().collect()));
             }
         }
@@ -278,6 +334,14 @@ impl Art {
             &self.lamp,
             &self.snow_post,
             &self.city_post,
+            &self.lantern_post,
+            &self.pumpkins,
+            &self.gravestone,
+            &self.scarecrow,
+            &self.dead_tree,
+            &self.dead_pine,
+            &self.withered_cactus,
+            &self.green_lamp,
             &self.chevron,
             &self.ghost,
         ];
@@ -353,6 +417,14 @@ mod tests {
             &art.lamp,
             &art.snow_post,
             &art.city_post,
+            &art.lantern_post,
+            &art.pumpkins,
+            &art.gravestone,
+            &art.scarecrow,
+            &art.dead_tree,
+            &art.dead_pine,
+            &art.withered_cactus,
+            &art.green_lamp,
             &art.chevron,
             &art.ghost,
         ];
@@ -367,13 +439,23 @@ mod tests {
     #[test]
     fn every_biome_has_its_flora_and_posts_the_size_of_the_meadows() {
         let art = Art::new();
-        for b in Biome::ALL {
+        for b in Look::ALL {
             assert_eq!(art.post_for(b).size_m, art.post.size_m, "{b:?}");
+            assert_eq!(art.rock_for(b).size_m, art.rock.size_m, "{b:?}");
             let f = art.flora(b);
             assert!(f.size_m.1 >= 5.0, "{b:?} stands tall");
-            if b != Biome::Meadow {
+            if b != Look::Meadow {
                 assert_ne!(f.sprites, art.tree.sprites, "{b:?}");
             }
+        }
+        // Every twin's flora is its own, and none is its biome's.
+        for (i, a) in Look::TWINS.iter().enumerate() {
+            assert_ne!(art.flora(*a).sprites, art.flora(a.biome()).sprites);
+            for b in &Look::TWINS[i + 1..] {
+                assert_ne!(art.flora(*a).sprites, art.flora(*b).sprites, "{a:?} {b:?}");
+            }
+            assert_ne!(art.post_for(*a).sprites, art.post.sprites);
+            assert_ne!(art.rock_for(*a).sprites, art.rock.sprites);
         }
         // A street light's lamp hangs out over the road: lit pixels left
         // of its post.

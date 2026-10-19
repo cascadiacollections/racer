@@ -14,8 +14,11 @@
 //! colour. Everything the HUD, the pad, the text and the road's surfaces
 //! are drawn in ([`FIXED`]) is the same colour in every biome, so what
 //! reads in the meadow reads everywhere.
+//!
+//! **Seasons** (DESIGN §5.2): each biome's Halloween twin ([`Look`]) is
+//! one more such table, changing the same six indices and no others.
 
-use racer_sim::biome::Biome;
+use crate::season::Look;
 
 /// One colour as `[r, g, b, a]`, the layout of an RGBA8 image row. Palette
 /// colours are opaque.
@@ -143,14 +146,76 @@ pub const NIGHT: Palette = biome_palette([
     [88, 58, 44, 255],
 ]);
 
-/// The colours of biome `b`.
-pub fn palette(b: Biome) -> &'static Palette {
-    match b {
-        Biome::Meadow => &COLOURS,
-        Biome::Coast => &COAST,
-        Biome::Alpine => &ALPINE,
-        Biome::Desert => &DESERT,
-        Biome::Night => &NIGHT,
+/// PUMPKIN PATCH (MEADOW's Halloween twin): stubble fields in the dusk,
+/// a purple sky over an orange glow, far hills in silhouette, pumpkin
+/// brown.
+pub const PUMPKIN: Palette = biome_palette([
+    [54, 44, 30, 255],
+    [100, 84, 40, 255],
+    [62, 36, 88, 255],
+    [222, 120, 52, 255],
+    [34, 24, 48, 255],
+    [124, 66, 32, 255],
+]);
+
+/// GHOST COVE (COAST's): wet dark sand and pale foggy sand, a night sky
+/// over a fog-grey horizon, a black headland, driftwood.
+pub const GHOST_COVE: Palette = biome_palette([
+    [44, 52, 40, 255],
+    [136, 136, 104, 255],
+    [36, 48, 86, 255],
+    [78, 96, 118, 255],
+    [28, 36, 58, 255],
+    [110, 72, 48, 255],
+]);
+
+/// HAUNTED PINES (ALPINE's): snow in moonlight and moon-shadow, a cold
+/// night sky, black pines, dead bark.
+pub const HAUNTED_PINES: Palette = biome_palette([
+    [120, 136, 168, 255],
+    [168, 182, 206, 255],
+    [30, 38, 76, 255],
+    [56, 66, 108, 255],
+    [22, 30, 36, 255],
+    [70, 52, 44, 255],
+]);
+
+/// BLOOD MOON MESA (DESERT DUSK's): red earth, a purple sky going
+/// purple-red at the horizon, near-black mesas, dried-blood rock.
+pub const BLOOD_MOON: Palette = biome_palette([
+    [86, 34, 40, 255],
+    [138, 62, 58, 255],
+    [72, 22, 64, 255],
+    [134, 36, 76, 255],
+    [38, 14, 32, 255],
+    [100, 44, 36, 255],
+]);
+
+/// MONSTER CITY (NIGHT CITY's): purple verges, a green-black sky with a
+/// sickly green glow at the horizon, a black skyline.
+pub const MONSTER_CITY: Palette = biome_palette([
+    [36, 20, 44, 255],
+    [58, 32, 70, 255],
+    [26, 50, 46, 255],
+    [52, 126, 66, 255],
+    [20, 16, 30, 255],
+    [96, 56, 40, 255],
+]);
+
+/// The colours of a look: a biome (`palette(Biome::Coast)`) or a seasonal
+/// twin (`palette(Look::GhostCove)`).
+pub fn palette(l: impl Into<Look>) -> &'static Palette {
+    match l.into() {
+        Look::Meadow => &COLOURS,
+        Look::Coast => &COAST,
+        Look::Alpine => &ALPINE,
+        Look::Desert => &DESERT,
+        Look::Night => &NIGHT,
+        Look::Pumpkin => &PUMPKIN,
+        Look::GhostCove => &GHOST_COVE,
+        Look::HauntedPines => &HAUNTED_PINES,
+        Look::BloodMoon => &BLOOD_MOON,
+        Look::MonsterCity => &MONSTER_CITY,
     }
 }
 
@@ -197,10 +262,11 @@ pub fn index_of(c: Rgba) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use racer_sim::biome::Biome;
 
     #[test]
     fn every_biome_has_sixteen_distinct_opaque_colours_and_keeps_the_fixed_ones() {
-        for b in Biome::ALL {
+        for b in Look::ALL {
             let p = palette(b);
             for (i, a) in p.iter().enumerate() {
                 assert_eq!(a[3], 255, "{b:?}");
@@ -211,7 +277,7 @@ mod tests {
             for i in FIXED {
                 assert_eq!(p[i as usize], COLOURS[i as usize], "{b:?} index {i}");
             }
-            if b != Biome::Meadow {
+            if b != Look::Meadow {
                 for i in SCENERY {
                     assert_ne!(p[i as usize], COLOURS[i as usize], "{b:?} index {i}");
                 }
@@ -221,8 +287,29 @@ mod tests {
     }
 
     #[test]
-    fn text_and_hud_colours_read_on_ink_in_every_biome() {
+    fn every_twin_changes_only_the_scenery_indices_of_its_biome() {
         for b in Biome::ALL {
+            let twin = Look::of(b, crate::season::Season::Halloween);
+            let (n, t) = (palette(b), palette(twin));
+            for i in 0..16u8 {
+                if SCENERY.contains(&i) {
+                    assert_ne!(n[i as usize], t[i as usize], "{twin:?} index {i}");
+                } else {
+                    assert_eq!(n[i as usize], t[i as usize], "{twin:?} index {i}");
+                }
+            }
+        }
+        // Each twin's tables differ from every other look's.
+        for (i, a) in Look::ALL.iter().enumerate() {
+            for b in &Look::ALL[i + 1..] {
+                assert_ne!(palette(*a), palette(*b), "{a:?} {b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn text_and_hud_colours_read_on_ink_in_every_biome() {
+        for b in Look::ALL {
             let p = palette(b);
             let c = |i: u8| p[i as usize];
             // Body text and the timer: AA for small text.
@@ -244,7 +331,7 @@ mod tests {
 
     #[test]
     fn the_road_reads_against_every_biomes_verges() {
-        for b in Biome::ALL {
+        for b in Look::ALL {
             let p = palette(b);
             let c = |i: u8| p[i as usize];
             for verge in [GRASS_DK, GRASS_LT] {

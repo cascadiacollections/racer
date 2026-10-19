@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Generate racer's sound effects and title music (art/audio/*.wav).
+"""Generate racer's sound effects and title music (art/audio/*.wav), and
+the Halloween season's variants (`*_halloween`).
 
 Modelled on Salt Line's tools/gen_audio.py: Python standard library only, no
 samples, downloads or third-party material; every sound is synthesised here.
@@ -405,6 +406,151 @@ def music():
     return out
 
 
+# ------------------------------------------------------------ Halloween
+# The season's sounds (DESIGN §5.2): played instead of the title music, the
+# gate chime, time up and the win while the Halloween season is on, plus a
+# quiet ambient loop under the engine. Original material, D minor.
+
+SPOOKY_RATE = 12000
+AMBIENT_RATE = 11025
+
+
+def tubular(f, t, ring):
+    """A tubular bell: inharmonic partials, the high ones dying first."""
+    return (0.55 * decay(t, ring, 3) * sin_cycles(f * t)
+            + 0.3 * decay(t, ring * 0.6, 3) * sin_cycles(2.76 * f * t)
+            + 0.15 * decay(t, ring * 0.35, 3) * sin_cycles(5.4 * f * t))
+
+
+def theremin(f, t, depth=0.006):
+    """An organ-theremin lead: a sine with a little second harmonic and an
+    edge of triangle, wavering at 5.5 Hz."""
+    c = f * t + depth * f / 5.5 * sin_cycles(5.5 * t) / TAU
+    return 0.7 * sin_cycles(c) + 0.2 * sin_cycles(2 * c) + 0.1 * tri(c)
+
+
+def chime_halloween():
+    """An eerie gate bell: two inharmonic bell strikes a tritone apart,
+    A5 then E-flat 6, beating slowly against a detuned twin."""
+    def voice(t, n):
+        out = 0.0
+        for start, note in ((0.0, 81), (0.11, 87)):
+            if t >= start:
+                lt = t - start
+                f = midi(note)
+                out += attack(lt, 0.003) * (tubular(f, lt, 0.7) + 0.35 * tubular(f * 1.006, lt, 0.7))
+        return out
+    return render(0.9, voice)
+
+
+def time_up_halloween():
+    """Out of time, haunted: a theremin falling from A5 to A3 in a long
+    wavering glissando over a low bell, fading like a ghost."""
+    osc = Osc(RATE)
+    out = []
+    seconds = 1.4
+    for i in range(int(RATE * seconds)):
+        t = i / RATE
+        k = min(1.0, t / 1.1)
+        f = midi(81 - 24 * k * (2 - k)) * (1 + 0.012 * sin_cycles(6.0 * t))
+        c = osc.step(f)
+        lead = attack(t, 0.02) * decay(t, seconds, 2.2) * (0.7 * sin_cycles(c) + 0.2 * sin_cycles(2 * c))
+        out.append(0.8 * lead + 0.45 * tubular(midi(50), t, 1.3))
+    return out
+
+
+def win_halloween():
+    """The run won, spookily: an organ arpeggio up D minor (D F A D) that
+    lands on a held D major chord (the last-minute sunrise), trembling,
+    under a bell."""
+    arp = (62, 65, 69, 74)
+
+    def voice(t, n):
+        if t < 0.48:
+            return notes(t, [midi(p) for p in arp], 0.12, 0.12, lambda f, tt: theremin(f, tt))
+        local = t - 0.48
+        env = attack(local, 0.02) * decay(local, 1.2, 3) * (0.85 + 0.15 * sin_cycles(7 * t))
+        chord = sum(0.3 * theremin(midi(p), t, 0.004) for p in (62, 66, 69, 74))
+        return env * chord + 0.5 * tubular(midi(74), local, 1.1)
+    return render(1.7, voice)
+
+
+def ambient_halloween():
+    """Three seconds of wind for under the engine: noise in a band whose
+    centre sways, and a faint moan sliding up and back, folded into a
+    seamless loop."""
+    rate = AMBIENT_RATE
+    frames = 3 * rate
+    fade = rate // 4
+    noise = Noise(0xA11)
+    lo, hi = Lowpass(0.02), Lowpass(0.12)
+    osc = Osc(rate)
+    x = []
+    for i in range(frames + fade):
+        t = i / rate
+        sway = 0.5 + 0.5 * sin_cycles(t / 3)
+        n = noise()
+        band = hi(n) - lo(n)
+        gust = 0.7 + 0.3 * sin_cycles(2 * t / 3 + 0.25)
+        moan_f = 330 + 50 * sin_cycles(t / 3)
+        moan = 0.12 * (0.5 + 0.5 * sin_cycles(t / 3 + 0.5)) * sin_cycles(osc.step(moan_f))
+        x.append(gust * (0.6 + 0.4 * sway) * band + moan)
+    return loop_crossfade(x, frames)
+
+
+# The season's title loop: 100 bpm, eight bars of D minor (Dm, B-flat, Gm,
+# A, twice, the second time climbing). Melody bars as (MIDI note or None,
+# eighths), played on the theremin; a plodding triangle bass in quarters;
+# a bell on the first beat of bars 1 and 5.
+SPOOKY_EIGHTH = 60 / 100 / 2
+SPOOKY_MELODY = [
+    [(74, 3), (77, 1), (76, 2), (74, 2)],
+    [(82, 4), (81, 2), (77, 2)],
+    [(79, 3), (82, 1), (81, 2), (79, 2)],
+    [(76, 2), (73, 2), (76, 3), (None, 1)],
+    [(81, 3), (77, 1), (74, 2), (77, 2)],
+    [(82, 2), (86, 3), (84, 1), (82, 2)],
+    [(79, 2), (77, 2), (76, 2), (73, 2)],
+    [(74, 6), (None, 2)],
+]
+SPOOKY_ROOTS = [38, 34, 31, 33]  # D2, B-flat 1, G1, A1
+
+
+def music_halloween():
+    """About nineteen seconds of spooky chiptune for the title in season.
+    Every note ends inside its bar and the bells have rung out by the seam."""
+    rate = SPOOKY_RATE
+    events = []  # (start s, length s, note, voice)
+    at = 0.0
+    for bar in SPOOKY_MELODY:
+        for note, eighths in bar:
+            if note is not None:
+                events.append((at, eighths * SPOOKY_EIGHTH * 0.9, note, "lead"))
+            at += eighths * SPOOKY_EIGHTH
+    total_eighths = 8 * len(SPOOKY_MELODY)
+    for q in range(total_eighths // 2):
+        root = SPOOKY_ROOTS[(q // 4) % 4] + 12
+        step = (0, 0, 7, 12)[q % 4]
+        events.append((q * 2 * SPOOKY_EIGHTH, SPOOKY_EIGHTH * 1.5, root + step, "bass"))
+    for bar in (0, 4):
+        events.append((bar * 8 * SPOOKY_EIGHTH, 3.0, 62, "bell"))
+    frames = int(round(total_eighths * SPOOKY_EIGHTH * rate))
+    out = [0.0] * frames
+    for start, length, note, kind in events:
+        f = midi(note)
+        a = int(round(start * rate))
+        b = min(frames, a + int(length * rate))
+        for i in range(a, b):
+            local = (i - a) / rate
+            if kind == "bell":
+                out[i] += 0.22 * attack(local, 0.003) * tubular(f, local, 2.4)
+                continue
+            gate = min(1.0, local / 0.03, (length - local) / 0.04)
+            if kind == "lead":
+                out[i] += 0.2 * gate * theremin(f, local + start)
+            else:
+                out[i] += 0.3 * gate * decay(local, length, 1.5) * tri(f * local)
+    return out
 SOUNDS = [
     # name, builder, rate, peak, loop. The peaks are the mix: the node plays
     # everything at 0 dB but the loops, which it sets from the car.
@@ -419,6 +565,12 @@ SOUNDS = [
     ("win", win, RATE, 0.7, False),
     ("spin", spin, RATE, 0.8, False),
     ("music", music, MUSIC_RATE, 0.5, True),
+    # The Halloween season's (DESIGN §5.2): first guesses, need ears.
+    ("chime_halloween", chime_halloween, RATE, 0.6, False),
+    ("time_up_halloween", time_up_halloween, RATE, 0.7, False),
+    ("win_halloween", win_halloween, RATE, 0.7, False),
+    ("ambient_halloween", ambient_halloween, AMBIENT_RATE, 0.3, True),
+    ("music_halloween", music_halloween, SPOOKY_RATE, 0.5, True),
 ]
 
 
