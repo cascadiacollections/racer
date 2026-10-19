@@ -179,6 +179,9 @@ impl INode2D for Racer {
             self.g.load_ghosts(&text);
             godot_print!("racer: {} ghosts loaded", self.g.ghosts().len());
         }
+        if let Ok(text) = std::fs::read_to_string(user_path(crate::daily::DAILY_FILE)) {
+            self.g.load_daily(&text);
+        }
         let slots = load_layouts_file(crate::editor::store::SLOTS_FILE);
         let draft = load_layouts_file(crate::editor::store::DRAFT_FILE);
         self.g.load_layouts(slots.as_deref(), draft.as_deref());
@@ -373,6 +376,24 @@ fn store_layouts_file(name: &str, text: Option<&str>) -> bool {
         godot_warn!("racer: could not write {}: {e}", path.display());
     }
     done.is_ok()
+}
+
+/// `user://<name>` as a filesystem path.
+fn user_path(name: &str) -> std::path::PathBuf {
+    let dir = ProjectSettings::singleton()
+        .globalize_path("user://")
+        .to_string();
+    std::path::Path::new(&dir).join(name)
+}
+
+/// Write `text` to a temporary file beside `path`, then rename it over
+/// `path`, so a crash mid-write leaves the last good file.
+fn write_atomic(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+    let tmp = path.with_extension("tmp");
+    path.parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| std::fs::write(&tmp, text))
+        .and_then(|()| std::fs::rename(&tmp, path))
 }
 
 /// `user://ghosts/ghosts.txt` as a filesystem path: the app's private data
@@ -588,7 +609,9 @@ impl Racer {
         }
         i.bottom_inset = self.inset;
         let t = Time::singleton();
-        i.entropy = (t.get_unix_time_from_system() * 1e6) as u64 ^ t.get_ticks_usec();
+        let now = t.get_unix_time_from_system();
+        i.entropy = (now * 1e6) as u64 ^ t.get_ticks_usec();
+        i.today = Some(crate::daily::day_of(now));
         if !i.events.is_empty() {
             self.redraw.mark();
         }
@@ -610,6 +633,12 @@ impl Racer {
                 Effect::Quit => self.base().get_tree().quit(),
                 Effect::SaveRun { name, text } => self.save_run(&name, &text),
                 Effect::SaveGhosts { text } => save_ghosts(&text),
+                Effect::SaveDaily { text } => {
+                    let path = user_path(crate::daily::DAILY_FILE);
+                    if let Err(e) = write_atomic(&path, &text) {
+                        godot_warn!("racer: could not save {}: {e}", path.display());
+                    }
+                }
                 Effect::Store { file, text } => {
                     let ok = store_layouts_file(file.name(), text.as_deref());
                     self.g.stored(file, ok);

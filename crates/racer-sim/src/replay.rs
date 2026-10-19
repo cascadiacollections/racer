@@ -322,6 +322,10 @@ pub struct RunFile {
     /// free drive (`RD`). `None` for a generated run. Replayed with
     /// `Layout::raced_track` and [`Replay::reconstruct_single`].
     pub layout: Option<String>,
+    /// For the daily run, its day as `YYYY-MM-DD` (UTC); `None` otherwise.
+    /// Written as a `daily <date>` line after the log, where a reader from
+    /// before daily runs stops reading, so it still reads the file.
+    pub daily: Option<String>,
 }
 
 /// Why a run file did not parse.
@@ -338,13 +342,18 @@ pub enum RunFileError {
 /// The text form: `racer-run 1`, `epoch N`, `ending won|lost|quit`,
 /// `seed 0x…`, then `log` and [`encode_log`]'s tokens. A custom race is
 /// `racer-run 2`, with a `layout <code>` line between the seed and the log.
+/// The daily run adds a `daily <date>` line after the log, in either version.
 pub fn encode_run(f: &RunFile) -> String {
     let (version, layout) = match &f.layout {
         None => (1, String::new()),
         Some(code) => (RUN_FILE, format!("layout {code}\n")),
     };
+    let daily = match &f.daily {
+        None => String::new(),
+        Some(date) => format!("daily {date}\n"),
+    };
     format!(
-        "racer-run {version}\nepoch {}\nending {}\nseed {:#018x}\n{layout}log {}\n",
+        "racer-run {version}\nepoch {}\nending {}\nseed {:#018x}\n{layout}log {}\n{daily}",
         f.epoch,
         f.ending.token(),
         f.replay.run_seed,
@@ -396,11 +405,21 @@ pub fn decode_run(text: &str) -> Result<RunFile, RunFileError> {
         }
     };
     let log = decode_log(field("log")?).map_err(RunFileError::Log)?;
+    // Optional, and last: what follows the log is read only if it is a
+    // daily line (a later build may add other lines).
+    let daily = match lines.next().and_then(|l| l.strip_prefix("daily ")) {
+        None => None,
+        Some(d) if d.is_empty() || d.contains(char::is_whitespace) => {
+            return Err(RunFileError::Field("daily"))
+        }
+        Some(d) => Some(d.to_string()),
+    };
     Ok(RunFile {
         epoch,
         ending,
         replay: Replay { run_seed, log },
         layout,
+        daily,
     })
 }
 
@@ -621,10 +640,25 @@ mod tests {
             ending: Ending::Quit,
             replay: Replay::of(&live),
             layout: None,
+            daily: None,
         };
         let text = encode_run(&f);
         assert!(text.starts_with("racer-run 1\nepoch "));
-        assert_eq!(decode_run(&text), Ok(f));
+        assert_eq!(decode_run(&text), Ok(f.clone()));
+        // A daily run: one more line, after the log, so a reader from
+        // before daily runs (which stops at the log) reads the same file.
+        let daily = RunFile {
+            daily: Some("2026-10-18".into()),
+            ..f.clone()
+        };
+        let daily_text = encode_run(&daily);
+        assert_eq!(daily_text, format!("{text}daily 2026-10-18\n"));
+        assert_eq!(decode_run(&daily_text), Ok(daily));
+        assert_eq!(
+            decode_run(&format!("{text}daily \n")),
+            Err(RunFileError::Field("daily"))
+        );
+        assert_eq!(decode_run(&format!("{text}later 1\n")), Ok(f));
         assert_eq!(decode_run(""), Err(RunFileError::Header));
         assert_eq!(decode_run("racer-run 3\n"), Err(RunFileError::Header));
         assert_eq!(

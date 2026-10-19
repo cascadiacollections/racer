@@ -104,8 +104,28 @@ fn title(g: &Game, c: &mut Canvas, art: &Art, l: &Layout) -> Vec<Button> {
         );
         return out;
     }
+    // Today's daily: its date and the best of today's tries.
+    if let Some(day) = g.today {
+        let best = match g.daily_best() {
+            Some(b) => format!("BEST {}/{TRACKS}  {}S", b.cleared, secs(b.ticks)),
+            None => "NOT RACED YET".to_string(),
+        };
+        banner(
+            c,
+            cx,
+            86,
+            &format!("DAILY {}", crate::daily::date(day)),
+            WHITE,
+            1,
+        );
+        banner(c, cx, 97, &best, WHITE, 1);
+    }
     let m = 6;
-    let start = Rect::new(m, p.y + m, l.w - 2 * m, 46);
+    // START and DAILY share the top row: a fresh run, or today's (the same
+    // for everyone).
+    let half = (l.w - 3 * m) / 2;
+    let start = Rect::new(m, p.y + m, half, 46);
+    let daily = Rect::new(2 * m + half, p.y + m, l.w - 3 * m - half, 46);
     let row = start.y + start.h + 6;
     let row_h = p.h - start.h - 2 * m - 6;
     // TRACKS: the bundled courses, your layouts and the editor.
@@ -117,6 +137,7 @@ fn title(g: &Game, c: &mut Canvas, art: &Art, l: &Layout) -> Vec<Button> {
         row_h,
     );
     labelled(c, &mut out, start, "START", Action::Start, true);
+    labelled(c, &mut out, daily, "DAILY", Action::Daily, false);
     labelled(c, &mut out, tracks, "TRACKS", Action::Tracks, false);
     labelled(c, &mut out, demo, "DEMO", Action::Demo, false);
     out
@@ -415,6 +436,20 @@ fn results(g: &Game, c: &mut Canvas, l: &Layout) -> Vec<Button> {
             &cu.layout.name
         };
         c.text(10, 142, &format!("{name}  {what}"), ASPHALT_LT, 1);
+    } else if let Some(day) = g.daily {
+        // Today's run: the same for everyone; tries and best kept on disk.
+        let rec = g.daily_record.on(day);
+        let best = rec.best.map_or("-".to_string(), |b| {
+            format!("{}/{TRACKS} {}S", b.cleared, secs(b.ticks))
+        });
+        c.text(
+            10,
+            142,
+            &format!("DAILY {}  TRY {}", crate::daily::date(day), rec.tries),
+            YELLOW,
+            1,
+        );
+        c.text(10, 152, &format!("TODAY'S BEST {best}"), YELLOW, 1);
     } else {
         // The seed, to fork any of its tracks FROM SEED.
         c.text(10, 142, &format!("SEED {}", run.run_seed()), ASPHALT_LT, 1);
@@ -464,6 +499,7 @@ fn results(g: &Game, c: &mut Canvas, l: &Layout) -> Vec<Button> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::Effect;
     use crate::builder::Inline;
     use crate::input::{Event, Intents, Key};
     use racer_sim::track::fixtures;
@@ -496,6 +532,90 @@ mod tests {
         (c, b)
     }
 
+    /// One frame on `day` (the node passes today's UTC day), keeping the
+    /// effects the core asked for.
+    fn step_on(g: &mut Game, events: Vec<Event>, day: u64) -> (Canvas, Vec<Button>, Vec<Effect>) {
+        let i = Intents {
+            events,
+            window: (1080, 2160),
+            entropy: 9,
+            today: Some(day),
+            ..Intents::default()
+        };
+        let fx = g.tick(1.0 / 30.0, &i);
+        let art = Art::shared();
+        let mut c = Canvas::new(1, 1);
+        let b = frame(g, &mut c, art);
+        g.set_buttons(b.clone());
+        (c, b, fx)
+    }
+
+    /// 2026-10-19, UTC.
+    const DAY: u64 = 20_745;
+
+    #[test]
+    fn daily_races_todays_seed_and_keeps_its_record_and_run_file() {
+        let mut g = game();
+        let (_, b, _) = step_on(&mut g, vec![], DAY);
+        assert!(has(&b, Action::Daily));
+        let mut fx = Vec::new();
+        fx.extend(step_on(&mut g, vec![Event::Key(Key::Char(b'D'))], DAY).2);
+        while g.mode != Mode::Racing {
+            fx.extend(step_on(&mut g, vec![], DAY).2);
+        }
+        assert_eq!(g.daily, Some(DAY));
+        assert_eq!(
+            g.run.as_ref().unwrap().run_seed(),
+            racer_sim::run::daily_seed(DAY)
+        );
+        assert!(
+            fx.iter().any(|e| matches!(e, Effect::SaveDaily { .. })),
+            "the try is counted on disk"
+        );
+        while g.mode == Mode::Racing || g.mode == Mode::Fork || g.mode == Mode::Building {
+            if g.mode == Mode::Fork {
+                fx.extend(step_on(&mut g, vec![Event::Key(Key::Enter)], DAY).2);
+            } else {
+                fx.extend(step_on(&mut g, vec![], DAY).2);
+            }
+        }
+        assert_eq!(g.mode, Mode::Results);
+        let run_file = fx.iter().find_map(|e| match e {
+            Effect::SaveRun { text, .. } => Some(text.clone()),
+            _ => None,
+        });
+        assert!(
+            run_file.unwrap().contains("daily 2026-10-19\n"),
+            "a daily run's file says so"
+        );
+        assert!(g.daily_record.on(DAY).tries >= 1);
+    }
+
+    #[test]
+    fn demo_never_touches_the_daily() {
+        let mut g = game();
+        step_on(&mut g, vec![], DAY);
+        let before = g.daily_record;
+        g.set_buttons(vec![Button {
+            rect: crate::layout::Rect::new(0, 0, 180, 400),
+            action: Action::Demo,
+        }]);
+        let tap = vec![Event::FingerDown {
+            index: 0,
+            x: 5.0,
+            y: 5.0,
+        }];
+        let mut fx = step_on(&mut g, tap, DAY).2;
+        fx.extend(step_on(&mut g, vec![Event::FingerUp { index: 0 }], DAY).2);
+        for _ in 0..300 {
+            fx.extend(step_on(&mut g, vec![], DAY).2);
+        }
+        assert!(g.demo());
+        assert_eq!(g.daily, None);
+        assert_eq!(g.daily_record, before);
+        assert!(!fx.iter().any(|e| matches!(e, Effect::SaveDaily { .. })));
+    }
+
     fn has(b: &[Button], a: Action) -> bool {
         b.iter().any(|x| x.action == a)
     }
@@ -506,8 +626,21 @@ mod tests {
         let mut g = game();
         let mut out = Vec::new();
         let (c, b) = step(&mut g, vec![]);
-        assert!(has(&b, Action::Start) && has(&b, Action::Demo));
+        assert!(has(&b, Action::Start) && has(&b, Action::Daily) && has(&b, Action::Demo));
         out.push(("title", c));
+        // The title on a day with a daily already raced: its date and best.
+        let mut d = game();
+        let mut rec = crate::daily::DailyRecord::default();
+        rec.start(DAY);
+        rec.offer(
+            DAY,
+            crate::daily::Score {
+                cleared: 3,
+                ticks: racer_sim::ticks(190.5),
+            },
+        );
+        d.load_daily(&rec.encode());
+        out.push(("title_daily", step_on(&mut d, vec![], DAY).0));
         step(&mut g, vec![Event::Key(Key::Enter)]);
         let (c, b) = step(&mut g, vec![]);
         assert_eq!(g.mode, Mode::Racing);

@@ -19,6 +19,8 @@ fn playstats_reports_every_driven_track_of_a_finished_run() {
         ending,
         replay: Replay::of(&run),
         layout: None,
+        // A daily run's file: the date is shown.
+        daily: Some("2026-10-18".into()),
     };
     let dir = std::env::temp_dir().join(format!("racer-playstats-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -40,6 +42,7 @@ fn playstats_reports_every_driven_track_of_a_finished_run() {
     let rows = text.lines().filter(|l| l.contains("/16 ")).count();
     assert_eq!(rows, run.results().len(), "{text}");
     assert!(text.contains("summary by track (1 runs)"), "{text}");
+    assert!(text.contains("  daily 2026-10-18  "), "{text}");
     assert!(!text.contains("QUIT"), "{text}");
 }
 
@@ -68,6 +71,7 @@ fn custom_run(timed: bool) -> (String, RunState) {
         },
         replay: Replay::of(&run),
         layout: Some(raced.to_code().unwrap()),
+        daily: None,
     };
     (encode_run(&f), run)
 }
@@ -92,6 +96,7 @@ fn playstats_replays_custom_races_from_their_layout_and_still_reads_v1() {
         ending: Ending::Lost,
         replay: Replay::of(&run),
         layout: None,
+        daily: None,
     });
     assert!(v1.starts_with("racer-run 1\n"));
     let path = dir.join("run-v1.txt");

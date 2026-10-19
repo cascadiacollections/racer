@@ -28,6 +28,8 @@ pub enum Action {
     Drift,
     Pause,
     Start,
+    /// The title's DAILY: today's run, the same for everyone.
+    Daily,
     Demo,
     PickEasy,
     PickHard,
