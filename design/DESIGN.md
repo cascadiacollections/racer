@@ -42,7 +42,35 @@ Racing --finish--> Forking --fork(b)--> Racing ... --finish track 5--> Won
 Both sides of a fork depend only on `(run_seed, index, branch)`, so the game
 can build them while the player drives the track before (M2).
 
-## 2. Tracks
+### 1.3 Retry and ghosts
+
+RETRY SEED on the results screen runs the same seed again: the same tracks
+on the same branches. The best finish on each track key is kept and raced
+as a ghost car (display only; it never touches the player's sim).
+
+### 1.4 The daily run
+
+DAILY on the title is one run a day, the same for everyone: its seed is
+`run::daily_seed(day)`, `mix64` of a fixed tag and the UTC day number since
+the Unix epoch (Salt Line's rule), so it turns over at 00:00 UTC everywhere.
+
+- **Ready before it is asked for.** When the title shows today's date, the
+  game prefetches all nine of the day's tracks (track 1 and both sides of
+  every fork) on the background builder, which runs two workers so a fork's
+  two roads build side by side. Built tracks are kept on disk
+  (`user://tracks`, keyed by run seed, index, branch and the sim epoch,
+  checked against the track's digest when read, oldest evicted past 64), so
+  relaunching or resuming never builds a track twice.
+- **Tries and best.** `daily.txt` keeps today's tries and best (tracks
+  cleared, then total time); the title shows the date and the best, the
+  results screen marks a daily run with its date, the try and the day's
+  best. RETRY races the daily again (ghosts work: the keys repeat).
+- **Run files** of a daily run carry a `daily <date>` line after the log,
+  which older readers ignore; `playstats` shows it.
+- DEMO never starts, counts or saves a daily.
+- Not built (would need a server): leaderboards and verified replays. A
+  daily CI job publishing the day's run fingerprint and checking submitted
+  replays is the plan if a leaderboard comes.
 
 ### 2.1 Representation
 

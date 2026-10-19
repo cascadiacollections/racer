@@ -36,6 +36,16 @@
 //! RETRY SEED on the results screen starts the same seed again: the same
 //! tracks, so the ghosts of the last attempt are there to race.
 //!
+//! DAILY on the title (DESIGN §1.4, `daily`) is today's run, the same for
+//! everyone: its seed is the UTC day's, which the adapter hands in with
+//! each frame's [`Intents`]. As soon as the day is known (the first frame)
+//! the whole of its run, track 1 and both sides of every fork, is asked of
+//! the builder in the background ([`Build::prefetch`]), so DAILY starts at
+//! once and its forks never wait. Today's tries and best are a
+//! [`DailyRecord`], kept as `daily.txt` through [`Effect::SaveDaily`]; a
+//! daily run's file says `daily <date>`. RETRY on its results is another
+//! try of the same daily.
+//!
 //! A custom race (DESIGN §9.6, `custom.rs`) is a run of one layout's track,
 //! started by [`Game::start_custom`]: no forks, no builder, timed only when
 //! the layout is proven, its ghost kept under the layout's digest. RETRY on
@@ -71,6 +81,7 @@ use racer_sim::DT;
 use crate::audio::{loop_targets, Loops, Mixer, Sfx, Watch};
 use crate::builder::{Build, Key};
 use crate::custom::Custom;
+use crate::daily::{self, DailyRecord, Score};
 use crate::editor::store::StoreFile;
 use crate::editor::{Act, Editor, Out};
 use crate::input::{bind, pressed, Controls, Event, Intents, SteerRamp};
@@ -147,6 +158,9 @@ pub enum Effect {
     CopyText(String),
     /// Read the system clipboard and hand it to [`Game::pasted`].
     ReadClipboard,
+    /// Today's daily record changed: write `text` ([`DailyRecord::encode`])
+    /// as [`daily::DAILY_FILE`] in the user data directory. Never for DEMO.
+    SaveDaily { text: String },
 }
 
 /// The DEMO driver.
@@ -224,6 +238,12 @@ pub struct Game {
     pub custom: Option<Custom>,
     /// The TRACKS list and the editor.
     pub editor: Editor,
+    /// Today, in UTC days since the Unix epoch, once the adapter has said.
+    pub today: Option<u64>,
+    /// The day of the daily run being raced; `None` for any other run.
+    pub daily: Option<u64>,
+    /// Today's daily tries and best.
+    pub daily_record: DailyRecord,
 }
 
 /// Seconds the title shows each biome before the next.
@@ -279,6 +299,57 @@ impl Game {
             attempt: 0,
             custom: None,
             editor: Editor::new(),
+            today: None,
+            daily: None,
+            daily_record: DailyRecord::default(),
+        }
+    }
+
+    /// Read the daily record ([`daily::DAILY_FILE`]'s text) at launch.
+    pub fn load_daily(&mut self, text: &str) {
+        self.daily_record = DailyRecord::decode(text);
+    }
+
+    /// Today's best daily run, if today is known and has one.
+    pub fn daily_best(&self) -> Option<Score> {
+        self.daily_record.on(self.today?).best
+    }
+
+    /// Ask the builder, in the background, for every track of `day`'s
+    /// daily run that is not built yet.
+    fn prebuild_daily(&mut self, day: u64) {
+        for key in daily::keys(daily::daily_seed(day)) {
+            if !self.built(key) {
+                self.builder.prefetch(key);
+            }
+        }
+    }
+
+    /// Start a try of `day`'s daily run.
+    fn start_daily(&mut self, day: u64) {
+        self.attempt = self.daily_record.start(day);
+        self.fx.push(Effect::SaveDaily {
+            text: self.daily_record.encode(),
+        });
+        self.start_seed(daily::daily_seed(day), false);
+        self.daily = Some(day);
+    }
+
+    /// The daily run on screen ended: keep it if it is the day's best.
+    fn daily_ended(&mut self) {
+        let (Some(day), Some(run), None) = (self.daily, &self.run, &self.demo) else {
+            return;
+        };
+        let lost = usize::from(run.phase() == RunPhase::Lost);
+        let cleared = &run.results()[..run.results().len().saturating_sub(lost)];
+        let score = Score {
+            cleared: cleared.len() as u32,
+            ticks: cleared.iter().map(|r| r.ticks).sum(),
+        };
+        if self.daily_record.offer(day, score) {
+            self.fx.push(Effect::SaveDaily {
+                text: self.daily_record.encode(),
+            });
         }
     }
 
@@ -492,6 +563,11 @@ impl Game {
             self.fx.push(Effect::Buffer { w, h });
             self.fx.push(Effect::Redraw);
         }
+        if let Some(day) = i.today.filter(|d| self.today != Some(*d)) {
+            self.today = Some(day);
+            self.prebuild_daily(day);
+            self.fx.push(Effect::Redraw);
+        }
         self.editor.tick(self.clock);
         for (key, track) in self.builder.poll() {
             self.cache.insert(key.0, key.1, key.2, track.clone());
@@ -546,13 +622,17 @@ impl Game {
         }
         match self.mode {
             Mode::Title => {
-                let tracks = i
-                    .events
-                    .iter()
-                    .any(|e| matches!(e, Event::Key(crate::input::Key::Char(b'T'))));
+                let typed = |c| i.events.contains(&Event::Key(crate::input::Key::Char(c)));
+                let tracks = typed(b'T');
+                let daily = self.touch.pressed(Action::Daily)
+                    || typed(b'D')
+                    || i.events.iter().any(|e| pressed(e, &[], bind::PAD_DAILY));
                 if confirm || self.touch.pressed(Action::Start) {
                     self.sfx.push(Sfx::Click);
                     self.start(i.entropy, false);
+                } else if let Some(day) = self.today.filter(|_| daily) {
+                    self.sfx.push(Sfx::Click);
+                    self.start_daily(day);
                 } else if self.touch.pressed(Action::Tracks) || tracks {
                     self.sfx.push(Sfx::Click);
                     self.open_tracks();
@@ -653,15 +733,23 @@ impl Game {
         let retry = self.touch.pressed(Action::Retry) || (confirm && self.results_sel == 1);
         if retry && self.demo.is_none() {
             self.sfx.push(Sfx::Click);
-            let (seed, attempt) = (self.seed, self.attempt + 1);
-            match self.custom.take() {
-                Some(c) => self.start_custom(c),
-                None => {
+            let (seed, attempt, daily) = (self.seed, self.attempt + 1, self.daily);
+            match (self.custom.take(), daily) {
+                (Some(c), _) => {
+                    self.start_custom(c);
+                    self.attempt = attempt;
+                }
+                // Another try of the same day's daily, counted as one.
+                (None, Some(day)) => {
+                    self.go_to_title();
+                    self.start_daily(day);
+                }
+                (None, None) => {
                     self.go_to_title();
                     self.start_seed(seed, false);
+                    self.attempt = attempt;
                 }
             }
-            self.attempt = attempt;
         } else if confirm || self.touch.pressed(Action::Continue) {
             self.sfx.push(Sfx::Click);
             if self.custom.as_ref().is_some_and(|c| c.test) {
@@ -715,6 +803,7 @@ impl Game {
             ending,
             replay: Replay::of(run),
             layout,
+            daily: self.daily.map(daily::date),
         };
         let name = match self.attempt {
             0 => format!("{kind}-{:016x}.txt", f.replay.run_seed),
@@ -735,6 +824,7 @@ impl Game {
         self.ghost = None;
         self.ghost_note = None;
         self.custom = None;
+        self.daily = None;
         self.results_sel = 0;
         self.touch.release_all();
         self.held = Held::default();
@@ -950,6 +1040,7 @@ impl Game {
                 self.touch.release_all();
                 self.fx.push(Effect::KeepScreenOn(false));
                 self.save_run(ending);
+                self.daily_ended();
             }
         }
     }

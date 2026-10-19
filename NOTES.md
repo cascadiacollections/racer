@@ -541,3 +541,18 @@ drawn in code at startup, nothing is scaled or rotated at draw time.
 - **Desktop check.** Headless import and a 300-frame run start clean (the
   known exit-time leak aside); `git diff project.godot` empty, stray
   `.import` files deleted. Not tried on a phone.
+
+## Daily run, two builders and the track store (2026-10-19)
+
+- DAILY on the title (DESIGN §1.4): the seed is `mix64` of a tag and the UTC
+  day, as in Salt Line; the title shows the date and today's best, results
+  show the date, the try and the best; `daily.txt` keeps them; run files gain
+  a `daily <date>` line. DEMO never touches it (tested).
+- Prebuild: with the title up, the day's nine tracks are prefetched; the
+  builder now runs two workers (requests jump ahead of prefetches) and keeps
+  built tracks in `user://tracks` (digest-checked, epoch-keyed, LRU of 64),
+  so DAILY starts at once and a fork's two roads build in parallel.
+- No sim change: golden runs, batch numbers and the determinism digest
+  (`0x4a5c1bcc8fc9fdfb`) are unchanged. Golden screens: `title` moved (the
+  DAILY button), `title_daily` is new.
+

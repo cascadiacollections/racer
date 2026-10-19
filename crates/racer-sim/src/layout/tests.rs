@@ -449,6 +449,7 @@ fn saved_custom(layout: &Layout, timed: bool) -> (RunState, String) {
         },
         replay: Replay::of(&run),
         layout: Some(raced.to_code().unwrap()),
+        daily: None,
     };
     (run, encode_run(&f))
 }

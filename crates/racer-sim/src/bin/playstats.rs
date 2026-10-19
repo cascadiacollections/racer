@@ -30,6 +30,9 @@
 //! track with the custom loadout, and its rows sum into a `custom` summary
 //! row of their own. A free drive's margin is the race cap's, not a timer's.
 //!
+//! A daily run's file (a `daily <date>` line) shows its date beside the
+//! seed.
+//!
 //! Exit status 2 on a bad argument or no readable run, 0 otherwise. A file
 //! from another epoch is skipped with a note: its replay would not be exact.
 
@@ -209,7 +212,10 @@ fn main() -> ExitCode {
             Ending::Quit => "quit",
         };
         match &custom {
-            None => println!("{path}  seed {seed:#018x}  {ending}"),
+            None => match &f.daily {
+                Some(date) => println!("{path}  seed {seed:#018x}  daily {date}  {ending}"),
+                None => println!("{path}  seed {seed:#018x}  {ending}"),
+            },
             Some((track, name)) => println!(
                 "{path}  layout {name} {seed:#018x} ({})  {ending}",
                 if track.allot_ticks().is_empty() {

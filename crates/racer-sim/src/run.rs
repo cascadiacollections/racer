@@ -92,6 +92,17 @@ impl Tracks for TrackCache {
     }
 }
 
+/// Tag for the daily run's seed: "RACERDAY" in ASCII.
+const DAILY_TAG: u64 = 0x5241_4345_5244_4159;
+
+/// The daily run's seed for day `day`, counted in whole UTC days since the
+/// Unix epoch (Salt Line's rule, DESIGN §1.4): everyone who plays that day,
+/// anywhere, gets this run. A pure function of the day; the clock is read
+/// by the engine adapter, never here. Never 0.
+pub fn daily_seed(day: u64) -> u64 {
+    crate::rng::mix64(DAILY_TAG ^ day).max(1)
+}
+
 /// How one track of the run went.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TrackResult {
@@ -339,6 +350,17 @@ pub fn state_hash(s: &RunState) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_daily_seed_is_fixed_per_day_and_new_each_day() {
+        // 2026-10-18 is UTC day 20744. Pinned: a change would hand every
+        // player a different daily run from the one their friends had.
+        assert_eq!(daily_seed(20744), daily_seed(20744));
+        assert_eq!(daily_seed(20744), 0x77d6_3255_4758_2204);
+        let ten_years: std::collections::BTreeSet<u64> = (20_000..23_650).map(daily_seed).collect();
+        assert_eq!(ten_years.len(), 3650, "no two days share a run");
+        assert!(!ten_years.contains(&0));
+    }
 
     /// Drive straight down the middle, braking at random, until the race
     /// ends: bad driving, enough to finish a gentle track or run out of time

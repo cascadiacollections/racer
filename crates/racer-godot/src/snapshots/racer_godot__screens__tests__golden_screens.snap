@@ -2,7 +2,8 @@
 source: crates/racer-godot/src/screens.rs
 expression: out
 ---
-title: 0xdc43b604e5576ce0
+title: 0x0ab8fb1500888ff8
+title_daily: 0xa2175dab935f2e78
 racing_start: 0x75e4ac692ddbc32c
 paused: 0xa0256191867936e8
 fork: 0x043fbd16b4f2848e

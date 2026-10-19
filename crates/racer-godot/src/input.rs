@@ -91,10 +91,14 @@ pub struct Intents {
     pub bottom_inset: i32,
     /// Entropy for a new run's seed (the node reads the clock).
     pub entropy: u64,
+    /// Today, whole UTC days since the Unix epoch, for the daily run (the
+    /// node reads the clock; nothing in the core or the sim does). `None`
+    /// until known.
+    pub today: Option<u64>,
 }
 
 impl Intents {
-    /// Nothing pressed or held; the window and entropy are kept.
+    /// Nothing pressed or held; the window, entropy and day are kept.
     pub fn clear(&mut self) {
         self.events.clear();
         self.keys_held.clear();
@@ -129,6 +133,8 @@ pub mod bind {
     pub const PAD_DRIFT: &[Pad] = &[Pad::South, Pad::R1, Pad::R2];
     pub const PAD_CONFIRM: &[Pad] = &[Pad::South, Pad::Start];
     pub const PAD_PAUSE: &[Pad] = &[Pad::Start, Pad::Back];
+    /// DAILY on the title (keys: a typed `D`).
+    pub const PAD_DAILY: &[Pad] = &[Pad::North];
     pub const MENU_LEFT: &[Key] = &[Key::Left, Key::A];
     pub const MENU_RIGHT: &[Key] = &[Key::Right, Key::D];
     pub const MENU_UP: &[Key] = &[Key::Up, Key::W];
