@@ -486,3 +486,51 @@ order, so every run (and DEMO) shows all five, meadow first.
   `.import` files deleted. Not tried on the Pixel: how the night and the
   desert read on the phone's panel, and whether the alpine peaks' shaded
   faces look busy at that size, are the things to look at.
+
+## Procedural sprites (2026-10-18)
+
+DESIGN §5 (Sprites). The placeholder art is replaced; every sprite is still
+drawn in code at startup, nothing is scaled or rotated at draw time.
+
+- **Nothing simulated moved.** Presentation only: no `SIM_EPOCH` bump; the
+  determinism digest is still `0x4a5c1bcc8fc9fdfb` (200 runs, 432,547
+  events, 0 divergences). A traffic car's look is a hash of its start, lane
+  and speed; its footprint is the sim's, as are every post's and rock's.
+- **Solid models** (`sprites/solid.rs`): convex faces, orthographic, a
+  z-buffer, pixel centres sampled; lit from the upper left onto short
+  palette ramps with a checkerboard between steps; an ink outline, ink
+  creases where one part stands in front of another, an ink-checkerboard
+  ground shadow. The player's car is drawn at 14 px/m from 0.45 rad
+  (gentler than the camera's ~58° at the car, so its tail shows); traffic
+  and the ghost at each scale step from `pitch_at(scale)`, the camera's
+  true angle at that depth capped at 0.55 rad. Traffic's three smallest
+  steps (2, 3, 5 px wide) are hand-drawn maps per kind: a renderer's
+  sampling loses the tail lamps at that size.
+- **Frames**: 15 poses (straight, lean 1/2 each way, drift L/R, 8 spin
+  turns) × lamps off/lit; `car_frame` leans one step below full lock and
+  two at it, and turns a spin through 1.5 turns, fast then slowing, the
+  other way when sliding left. Smoke (4 puff sizes) and the boost flame (2
+  flickers) are placed at each frame's tyre and pipe points.
+- **Ghost**: the player's car in ICE/WATER/WHITE, body checkerboarded,
+  dark parts and a white outline solid; past ~15 m (scale under 3 px/m) a
+  7×5 marker floats over it, only while some of it shows over the road.
+  Owner feedback was that it went faint past ~15 m; check on the Pixel.
+- **Cost**, this machine (release): `Art::new` 7.4 ms once at startup
+  (`art_build_cost`; 60 ms in a debug build, so tests share one
+  `Art::shared`), 138,523 bytes of sprites. `raster_bench` before → after
+  (µs per 180×360 frame): MEADOW 232 → 228–236, COAST 223 → 221–223,
+  ALPINE 245 → 241–266 (noisy), DESERT 83 → 84, NIGHT 105 → 105. The larger
+  player car first cost ~15 µs a frame; `Canvas::blit` now clips columns
+  once and writes rows directly, which won it back.
+- **Golden frames.** Every render golden moved (`sweep_mid_curve`,
+  `hairpin_entry`, `crest_climbing`, `crest_over`, `hazards`,
+  `drift_corner_signed`, `ghost_ahead`, `biome_coast`, `biome_alpine`,
+  `biome_desert`, `biome_night`); added `ghost_10m`, `ghost_20m`,
+  `ghost_40m`, `gate_ahead`, `finish_ahead`. Screens `title`,
+  `racing_start` and `paused` moved (they show the road); no other screen
+  did. `dump_sprite_sheet` writes every sprite to
+  `target/frames/sprite_sheet.ppm`. Site images regenerated; the favicon
+  crop is centred on the (now wider) car.
+- **Desktop check.** Headless import and a 300-frame run start clean (the
+  known exit-time leak aside); `git diff project.godot` empty, stray
+  `.import` files deleted. Not tried on a phone.

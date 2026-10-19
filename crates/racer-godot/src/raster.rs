@@ -220,13 +220,21 @@ impl Canvas {
     /// hides it: a crest). Mirrored left-to-right when `flip`.
     pub fn blit(&mut self, s: &Sprite, x: i32, y: i32, y_max: i32, flip: bool) {
         let y_end = (y + s.h).min(y_max).min(self.h);
+        // Clip the columns once; each row is then a straight copy of its
+        // painted pixels.
+        let (sx0, sx1) = ((-x).max(0), (self.w - x).min(s.w));
+        if sx0 >= sx1 {
+            return;
+        }
         for yy in y.max(0)..y_end {
             let row = (yy - y) as usize * s.w as usize;
-            for sx in 0..s.w {
-                let src = if flip { s.w - 1 - sx } else { sx };
-                let c = s.px[row + src as usize];
+            let src = &s.px[row..row + s.w as usize];
+            let dst = (yy * self.w + x) as isize * 4;
+            for sx in sx0..sx1 {
+                let c = src[if flip { s.w - 1 - sx } else { sx } as usize];
                 if c != Sprite::CLEAR {
-                    self.put(x + sx, yy, c);
+                    let i = (dst + sx as isize * 4) as usize;
+                    self.px[i..i + 4].copy_from_slice(&self.pal[(c as usize).min(15)]);
                 }
             }
         }

@@ -271,6 +271,23 @@ Decided, not built:
   the aspect: Salt Line's "fix the short side" rule, rotated.
 - **Art rules**: Salt Line's — a 16-colour palette, 4× source art, nearest
   filtering everywhere.
+- **Sprites** *(built, October 2026)*: all drawn in code at startup
+  (`sprites/`), deterministic, nothing scaled or rotated at draw time.
+  Cars are small solid models (`sprites/solid.rs`) drawn once per frame
+  pose and scale step: flat faces lit from the upper left on short
+  palette ramps, a checkerboard between steps (dithering only, no
+  blends), an ink outline and an ink-checkerboard ground shadow. The
+  player's car (an original red hatch-coupe) has straight, two lean steps
+  each way, drift left/right and eight spin frames, each with brake lamps
+  off and lit; tyre smoke and the boost flame are separate small sprites
+  at points each frame records. Traffic is three kinds (hatchback, box
+  van, pickup) in blue, yellow and white, drawn per step from the angle
+  the camera sees that depth at; the three smallest steps are hand-drawn
+  pixel maps. Cars use only the fixed indices. Roadside things are
+  shapes in metres sampled per step, edged on the shadow side once a step
+  can carry it. The ghost is the player's car, pale, its body
+  checkerboarded inside a solid outline, with a marker over it past
+  ~15 m.
 - **Controls**: Left/Right steer, Down brakes, Drift held. Touch and
   keys/pad equally first-class.
 - **Devices**: Android export with Salt Line's stripped templates and the
