@@ -1,0 +1,147 @@
+# Builds the project page (site/) and, once Pages is switched on, publishes it.
+#
+# Every game image on the page is painted here by the renderer itself
+# (tools/build_site.py dumps the golden frames), so the page cannot drift
+# from the game: change how the road is drawn and the next build shows it.
+#
+# The page is an internal draft while the game has no name, so deploying is
+# off by default. Every run builds the page and uploads it as the `site`
+# workflow artifact to download and open locally. To publish it:
+#   1. Settings → Pages → Source: GitHub Actions (build_type=workflow), e.g.
+#      gh api -X POST repos/cascadiacollections/racer/pages -f build_type=workflow
+#   2. Set the repository variable PAGES_DEPLOY to `on`, e.g.
+#      gh variable set PAGES_DEPLOY --body on
+# then re-run this workflow (or push to main).
+name: pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - 'tools/build_site.py'
+      # What the golden frames are painted from: the renderer, its sprites,
+      # font, palette, projection and layout, and the sim's track fixtures.
+      - 'crates/racer-godot/src/render.rs'
+      - 'crates/racer-godot/src/palette.rs'
+      - 'crates/racer-godot/src/sprites.rs'
+      - 'crates/racer-godot/src/raster.rs'
+      - 'crates/racer-godot/src/font.rs'
+      - 'crates/racer-godot/src/project.rs'
+      - 'crates/racer-godot/src/layout.rs'
+      - 'crates/racer-sim/src/track.rs'
+      # The licenses page.
+      - 'LICENSE'
+      - 'third_party/**'
+      - 'addons/device_power/LICENSE'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/pages.yml'
+  # Same paths as push: keep the two lists in step.
+  pull_request:
+    paths:
+      - 'site/**'
+      - 'tools/build_site.py'
+      # What the golden frames are painted from: the renderer, its sprites,
+      # font, palette, projection and layout, and the sim's track fixtures.
+      - 'crates/racer-godot/src/render.rs'
+      - 'crates/racer-godot/src/palette.rs'
+      - 'crates/racer-godot/src/sprites.rs'
+      - 'crates/racer-godot/src/raster.rs'
+      - 'crates/racer-godot/src/font.rs'
+      - 'crates/racer-godot/src/project.rs'
+      - 'crates/racer-godot/src/layout.rs'
+      - 'crates/racer-sim/src/track.rs'
+      # The licenses page.
+      - 'LICENSE'
+      - 'third_party/**'
+      - 'addons/device_power/LICENSE'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+# Read-only by default. Only the deploy job gets to publish (pages, id-token);
+# the build job, which runs cargo and the generator, never holds write access.
+permissions:
+  contents: read
+
+# One run per ref; a pull request's newer push supersedes its older one, but
+# a run on main that may be mid-publish is never cancelled.
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pages: read   # configure-pages reads the site's base URL
+    env:
+      DEPLOY: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.PAGES_DEPLOY == 'on' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable  # the pinned channel still comes from rust-toolchain.toml
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: paint the golden frames and write the site's images
+        run: python3 tools/build_site.py
+      - name: assets the page needs must exist
+        run: |
+          set -eu
+          for f in index.html licenses.html style.css main.js \
+                   assets/hero.png assets/og.png assets/favicon.png assets/palette_16.png; do
+            test -s "site/$f" || { echo "missing site/$f"; exit 1; }
+          done
+          # Every local src/href in the page must resolve.
+          grep -oE '(src|href)="[^"#:]+"' site/index.html | cut -d'"' -f2 | sort -u |
+            while read -r p; do test -s "site/$p" || { echo "broken link: $p"; exit 1; }; done
+      # Pages is not enabled while the page is a draft, and configure-pages
+      # fails without it, so the live base URL is only read when deploying.
+      - id: pages
+        if: env.DEPLOY == 'true'
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+      # The repository's Pages host is not knowable from the source tree (a
+      # private repo gets a randomised *.pages.github.io origin), so the
+      # canonical and Open Graph URLs are stamped in from the live base URL.
+      - name: stamp the canonical and Open Graph URLs
+        if: env.DEPLOY == 'true'
+        env:
+          BASE_URL: ${{ steps.pages.outputs.base_url }}
+        run: |
+          set -eu
+          base="${BASE_URL%/}/"
+          echo "site URL: $base"
+          sed -i "s#__SITE_URL__#$base#g" site/index.html
+          ! grep -q __SITE_URL__ site/index.html
+      - name: upload the site for preview
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: site
+          path: site
+          retention-days: 14
+      - if: env.DEPLOY == 'true'
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    # Off until Pages is enabled and PAGES_DEPLOY=on (see the top of this file).
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.PAGES_DEPLOY == 'on'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

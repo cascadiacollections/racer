@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>racer: every road proven drivable (working codename)</title>
+<meta name="description" content="racer is the working codename of a portrait, retro pseudo-3D roguelike racer in which every generated track is driven by a human-like bot before you see it. An early prototype for Android phones.">
+<!-- The placeholder below is rewritten to the live Pages base URL at deploy
+     time (.github/workflows/pages.yml); it only affects link previews. -->
+<link rel="canonical" href="__SITE_URL__">
+<meta property="og:type" content="website">
+<meta property="og:title" content="racer: every road proven drivable">
+<meta property="og:description" content="A portrait, retro pseudo-3D roguelike racer. Every generated track is driven by a human-like bot before you see it. Early prototype; the name is a placeholder.">
+<meta property="og:url" content="__SITE_URL__">
+<meta property="og:image" content="__SITE_URL__assets/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#10121c">
+<link rel="icon" href="assets/favicon.png" type="image/png">
+<link rel="apple-touch-icon" href="assets/favicon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="brand" href="#top">
+    <img src="assets/favicon.png" alt="" width="32" height="32" class="px brand-spr">
+    <span>RACER</span>
+  </a>
+  <nav aria-label="Sections">
+    <a href="#proven">Proven roads</a>
+    <a href="#play">How it plays</a>
+    <a href="#frames">Frames</a>
+    <a href="#tech">Under the hood</a>
+    <a href="#dev">Dev build</a>
+    <a href="#build">Build it</a>
+    <a class="ext" href="https://github.com/cascadiacollections/racer">Source ↗</a>
+  </nav>
+</header>
+
+<main id="main">
+
+<section id="top" class="hero">
+  <div class="hero-art" aria-hidden="true">
+    <img src="assets/hero.png" alt="" class="px" width="1088" height="412" fetchpriority="high">
+    <div class="crt"></div>
+  </div>
+
+  <div class="hero-copy">
+    <p class="kicker"><span class="blink">▌</span> PROTOTYPE &nbsp;·&nbsp; MILESTONE 2 &nbsp;·&nbsp; WORKING CODENAME</p>
+    <h1>racer</h1>
+    <p class="tagline">A portrait, retro pseudo-3D racer for one thumb on each
+      side of a phone. A run is five generated tracks against a checkpoint
+      timer, with a fork and an upgrade after each. Every one of those tracks
+      has been driven by a human-like bot, on every car you could arrive with,
+      before it is shown to you.</p>
+
+    <ul class="badges" aria-label="At a glance">
+      <li>Every road proven</li>
+      <li>180 px wide, 16 colours</li>
+      <li>Deterministic Rust sim</li>
+      <li>Godot 4.7.2</li>
+    </ul>
+
+    <div class="cta">
+      <a class="btn primary" href="#dev">Get the dev build</a>
+      <a class="btn" href="https://github.com/cascadiacollections/racer">Get the source</a>
+      <a class="btn ghost" href="https://github.com/cascadiacollections/racer/blob/main/design/DESIGN.md">Read the design doc</a>
+    </div>
+
+    <p class="fineprint">"racer" is a working codename: the game has no name
+      yet. Android only for now, sideloaded, and not on any store. The source
+      and the dev build need access to the GitHub repository.</p>
+  </div>
+</section>
+
+<!-- ------------------------------------------------------------ proven -->
+<section id="proven" aria-labelledby="proven-h">
+  <h2 id="proven-h">How a track is proven</h2>
+  <p class="lede">Procedural racers usually generate a road and hope. This one
+    builds a track, then has two bots drive it, and only a track that passes
+    every check is ever shown. Not "probably drivable": checked, on every
+    loadout the player can reach it with.</p>
+
+  <div class="cards">
+    <article class="card">
+      <h3><span class="num">01</span> Two drivers</h3>
+      <p>A <em>perfect</em> bot is the ceiling: it plans the whole track's
+        speed at 93% of grip and searches which corners to drift. A
+        <em>human-like</em> bot is the floor: it reacts to 150 ms old
+        information, can't see over crests, aims a little off its line,
+        lapses now and then and overcooks the odd corner.</p>
+      <code>human: 150 ms late · 85% grip · 1% lapses/s</code>
+    </article>
+    <article class="card">
+      <h3><span class="num">02</span> The timer is measured</h3>
+      <p>Each gate's time is calibrated from sixteen human-bot drives on the
+        weakest car you could arrive in, plus a margin. Then fresh human
+        drives, with noise the calibration never saw, must keep that margin
+        on <em>every</em> reachable loadout, 15 times out of 16.</p>
+      <code>margin: 2.0 s on track 1 → 1.0 s on track 5</code>
+    </article>
+    <article class="card">
+      <h3><span class="num">03</span> Redraw, repair, fall back</h3>
+      <p>A draft that fails is redrawn; the best failure has its worst
+        section softened; as a last resort comes a gentle road every car
+        takes flat out. Drift-required corners must be passable with a drift
+        and cost a grip-only driver at least 1.5 s.</p>
+      <code>8 redraws → 2 repairs → fallback</code>
+    </article>
+  </div>
+
+  <div class="panel gate">
+    <div class="dosbar"><span>BATCH GATE · CI</span><span class="dots">■ ■ ■</span></div>
+<pre class="dos">
+  just balance              200 run seeds · 1,800 tracks
+
+  unvalidated tracks ...... 0          (must be 0)
+  fallback tracks ......... 1.33%      (must be ≤ 2%)
+  human runs lost ......... 3.9%       (must be 3–15%)
+  perfect bot time left ... 6–18 s     (every track)
+  human over perfect ...... 8–30%      (every track)
+</pre>
+  </div>
+  <p class="small">Numbers from the M1 build, recorded in
+    <a href="https://github.com/cascadiacollections/racer/blob/main/NOTES.md">NOTES.md</a>.
+    CI runs the whole batch on every pull request; the human bot's numbers are
+    being checked against real playtest runs.</p>
+</section>
+
+<!-- ------------------------------------------------------------- play -->
+<section id="play" aria-labelledby="play-h">
+  <h2 id="play-h">How it plays</h2>
+  <div class="cards">
+    <article class="card">
+      <h3>Five tracks, four forks</h3>
+      <p>About a minute a track, split by checkpoint gates. Time left at one
+        gate carries to the next; running out is the only way to lose. After
+        each track, pick the easier road or the harder one, each with its own
+        upgrade: engine, turbo, tyres, brakes or charger. They stack.</p>
+    </article>
+    <article class="card">
+      <h3>Drift to boost</h3>
+      <p>Hold drift into a bend to slide wide and charge a boost; let go to
+        spend it. Early tracks only hint at it. From track 3 some long,
+        tight carousels are signed with chevrons and can't be made in time
+        without a drift.</p>
+    </article>
+    <article class="card">
+      <h3>Hills, traffic, things by the road</h3>
+      <p>Blind crests hide what is over the top. Slow traffic in packs, one
+        lane always free. Posts on the outside of bends, rocks in the lane,
+        gravel, ice and puddles, and narrows on harder tracks. A hit spins
+        you out and costs seconds.</p>
+    </article>
+    <article class="card">
+      <h3>Thumbs first</h3>
+      <p>Left, right, brake and drift pads under the road, lifted clear of
+        Android's gesture bar. Steering ramps up over 200 ms so a tap is a
+        nudge. Keys and a gamepad work too, and all of them reduce to the same
+        one byte per tick, so a replay can't tell them apart.</p>
+    </article>
+  </div>
+</section>
+
+<!-- ------------------------------------------------------------ frames -->
+<section id="frames" aria-labelledby="frames-h">
+  <h2 id="frames-h">Frames from the renderer</h2>
+  <p class="lede">These are the renderer's golden frames: fixed scenes whose
+    pixel digests the test suite pins on Linux, macOS and Windows. The site
+    build paints them fresh from the code, at 2×, nearest-neighbour.</p>
+  <div class="frame-grid">
+    <figure>
+      <img src="assets/frames/drift_corner_signed.png" alt="Drifting into a signed right-hand carousel: a yellow DRIFT banner, chevron signs on the outside of the bend, a rock by the road and the drift charge bar filling under the HUD." class="px" width="360" height="800" loading="lazy">
+      <figcaption>A signed drift corner, the charge bar filling.</figcaption>
+    </figure>
+    <figure>
+      <img src="assets/frames/crest_climbing.png" alt="Climbing toward a crest: the road ends at the summit and nothing beyond it is visible." class="px" width="360" height="800" loading="lazy">
+      <figcaption>Climbing: the road ends at the crest.</figcaption>
+    </figure>
+    <figure>
+      <img src="assets/frames/crest_over.png" alt="Just over the crest: the road drops away and winds into the distance." class="px" width="360" height="800" loading="lazy">
+      <figcaption>Over the top, the road appears.</figcaption>
+    </figure>
+    <figure>
+      <img src="assets/frames/hairpin_entry.png" alt="Approaching a hairpin with a checkpoint gate across the road ahead." class="px" width="360" height="720" loading="lazy">
+      <figcaption>A gate at a hairpin's entry.</figcaption>
+    </figure>
+    <figure>
+      <img src="assets/frames/sweep_mid_curve.png" alt="Mid-way through a long right-hand sweep with clouds above the hills." class="px" width="360" height="640" loading="lazy">
+      <figcaption>A sweep, on a shorter phone.</figcaption>
+    </figure>
+    <figure>
+      <img src="assets/frames/hazards.png" alt="A long straight toward the finish with red and white kerbs." class="px" width="360" height="640" loading="lazy">
+      <figcaption>The straight to the finish.</figcaption>
+    </figure>
+  </div>
+  <figure class="palette">
+    <img src="assets/palette_16.png" alt="The sixteen colours: ink, two asphalt greys, white, red, dark red, two grass greens, two sky blues, hill blue, gravel, ice, water blue, yellow and brown." class="px" width="768" height="80" loading="lazy">
+    <figcaption>Sixteen colours, fixed. Every pixel the game draws is one of
+      them, and the tests hold each rendered frame to that. The art is
+      placeholder procedural pixel art, drawn in code.</figcaption>
+  </figure>
+</section>
+
+<!-- -------------------------------------------------------------- tech -->
+<section id="tech" aria-labelledby="tech-h">
+  <h2 id="tech-h">Under the hood</h2>
+  <div class="cards">
+    <article class="card">
+      <h3>Same seed, same race, everywhere</h3>
+      <p>The simulation is a Rust crate with no dependencies and no engine: a
+        fixed 120 Hz step, its own trig instead of libm, SplitMix64 and PCG32
+        streams, integer tracks. Two hundred noisy bot runs, each replayed
+        from its log, hash to the same digest on Linux, macOS, Windows, an
+        Android emulator, a Pixel 10 and a Lenovo tablet.</p>
+      <code>0x4a5c1bcc8fc9fdfb</code>
+    </article>
+    <article class="card">
+      <h3>Versioned outcomes</h3>
+      <p>A run is a seed and an input log. A sim epoch names a digest over
+        pinned tracks and a corpus of golden runs, so a change that would
+        move a replay's outcome fails the tests until the epoch is bumped.</p>
+      <code>SIM_EPOCH = 1</code>
+    </article>
+    <article class="card">
+      <h3>A software road</h3>
+      <p>The classic pseudo-3D road, rastered in Rust into one 180-pixel-wide
+        buffer and uploaded as one texture; Godot only presents it. The height
+        floats with the phone's aspect, so a taller phone sees more sky, not a
+        smaller car.</p>
+      <code>180 × 320–400 · 16 colours</code>
+    </article>
+    <article class="card">
+      <h3>Kind to the battery</h3>
+      <p>120 Hz on a charger, 60 on battery, and backing off when the phone
+        runs hot, through
+        <a href="https://github.com/KevinTCoughlin/godot-device-power">godot-device-power</a>.
+        A stripped Godot engine keeps the APK near 28 MB.</p>
+      <code>charger 120 · battery 60 · hot 30</code>
+    </article>
+  </div>
+</section>
+
+<!-- --------------------------------------------------------------- dev -->
+<section id="dev" aria-labelledby="dev-h">
+  <h2 id="dev-h">Dev build</h2>
+  <p class="small">Every push to <code>main</code> replaces the rolling
+    <code>dev</code> prerelease with a new APK. It is a prototype: expect
+    rough edges and no sound yet. GitHub sign-in and repository access are
+    required; there is no store release.</p>
+  <div class="cards dl">
+    <article class="card">
+      <h3>Android <span class="arch">arm64</span></h3>
+      <ol>
+        <li>Download the APK on your phone.</li>
+        <li>Open it, and let your browser install unknown apps when asked.</li>
+        <li>Later dev builds install over it. Switching between a CI build and
+          a local build needs an uninstall, which deletes saved runs.</li>
+      </ol>
+      <a class="btn primary" href="https://github.com/cascadiacollections/racer/releases/download/dev/Racer-android-arm64.apk">Download APK</a>
+      <a class="btn" href="https://github.com/cascadiacollections/racer/releases/tag/dev">Release page</a>
+    </article>
+    <article class="card">
+      <h3>Playtesting</h3>
+      <p>Every run you finish or quit is saved on the phone as its seed and
+        input log. <code>just pull-runs</code> copies them off and sets each
+        track's time, closest margin and spins beside sixteen human-bot drives
+        of the same track: that comparison is how the bot gets tuned.</p>
+    </article>
+  </div>
+  <p class="small">Verify with <a href="https://github.com/cascadiacollections/racer/releases/download/dev/SHA256SUMS">SHA256SUMS</a>
+    or <code>gh attestation verify</code>.</p>
+</section>
+
+<!-- ------------------------------------------------------------- build -->
+<section id="build" aria-labelledby="build-h">
+  <h2 id="build-h">Build from source</h2>
+  <p class="lede">Rust (pinned in <code>rust-toolchain.toml</code>), Godot
+    4.7.2 and <code>just</code>. The Android recipes also need the Android SDK
+    and NDK and JDK 21; the
+    <a href="https://github.com/cascadiacollections/racer/blob/main/README.md">README</a>
+    has the details.</p>
+  <div class="build-grid">
+    <div>
+      <div class="codeblock">
+        <button class="copy" type="button" data-copy="#quickstart">Copy</button>
+<pre id="quickstart"><code>git clone https://github.com/cascadiacollections/racer
+cd racer
+just test      # sim, renderer, golden runs; no Godot needed
+just run       # build the extension and play on the desktop
+just balance   # build and prove 1,800 tracks</code></pre>
+      </div>
+      <p class="small">On a phone: <code>just android-template</code> once, then
+        <code>just android</code> builds, installs and launches;
+        <code>just android-digest</code> checks the phone agrees with this
+        machine bit for bit.</p>
+
+      <h3>Keys</h3>
+      <table class="keys">
+        <tbody>
+          <tr><th scope="row"><kbd>←</kbd> <kbd>→</kbd> / <kbd>A</kbd> <kbd>D</kbd></th><td>Steer (ramps to full lock in 200 ms)</td></tr>
+          <tr><th scope="row"><kbd>↓</kbd> / <kbd>S</kbd></th><td>Brake; the throttle is automatic</td></tr>
+          <tr><th scope="row"><kbd>Space</kbd> / <kbd>Shift</kbd></th><td>Drift (hold, with some steering)</td></tr>
+          <tr><th scope="row"><kbd>Esc</kbd> / <kbd>P</kbd></th><td>Pause</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <aside class="reqs panel">
+      <h3>At a glance</h3>
+      <dl>
+        <dt>Platform</dt><dd>Android (arm64); desktop for development</dd>
+        <dt>Engine</dt><dd>Godot 4.7.2 via gdext, presentation only</dd>
+        <dt>Sim</dt><dd>Rust, no dependencies, 120 Hz</dd>
+        <dt>Buffer</dt><dd>180 px wide, 16 colours</dd>
+        <dt>Run save</dt><dd>(seed, input log)</dd>
+        <dt>Network</dt><dd>None; no telemetry</dd>
+      </dl>
+      <h3>Headless tools</h3>
+      <ul class="tools">
+        <li><code>batch</code>: build and prove 1,800 tracks, gate on the result</li>
+        <li><code>determinism</code>: 200 runs replayed and hashed</li>
+        <li><code>trackviz</code>: a strip chart of any track</li>
+        <li><code>playstats</code>: your runs next to the bot's</li>
+      </ul>
+    </aside>
+  </div>
+</section>
+
+<!-- ------------------------------------------------------------ status -->
+<section class="status" aria-labelledby="status-h">
+  <h2 id="status-h">What "prototype" means here</h2>
+  <ul class="checks">
+    <li class="yes">The simulation, the generator and the solver are built and gated in CI.</li>
+    <li class="yes">It is playable on a phone from the first track to the fifth, with forks, upgrades, pause and a demo mode.</li>
+    <li class="yes">CI builds a signed, attested APK from every push to <code>main</code>.</li>
+    <li class="no">No name yet: "racer" is a working codename.</li>
+    <li class="no">The art is placeholder pixel art drawn in code, and there is no sound yet.</li>
+    <li class="no">Not on any store. Balance moves between builds; a run from an older sim epoch keeps its seed and nothing else.</li>
+  </ul>
+</section>
+
+</main>
+
+<footer>
+  <div class="foot-grid">
+    <div>
+      <p class="brand-foot">RACER</p>
+      <p class="small">Every road proven drivable.<br>Deterministic Rust core, Godot 4 presentation.</p>
+    </div>
+    <nav aria-label="Project links">
+      <a href="https://github.com/cascadiacollections/racer">Repository</a>
+      <a href="https://github.com/cascadiacollections/racer/blob/main/design/DESIGN.md">Design doc</a>
+      <a href="https://github.com/cascadiacollections/racer/blob/main/NOTES.md">Build notes</a>
+      <a href="https://github.com/cascadiacollections/racer/issues">Issues</a>
+      <a href="licenses.html">MIT license &amp; FOSS acknowledgments</a>
+    </nav>
+    <p class="small colophon">Every track is generated from a seed by this
+      repository's grammar; no layout is copied or traced from another game.
+      This page ships no trackers, no cookies and no third-party requests,
+      and every game image on it was painted by the game's own renderer.</p>
+  </div>
+</footer>
+
+<script src="main.js" defer></script>
+</body>
+</html>

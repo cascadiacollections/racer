@@ -284,3 +284,20 @@ each other with `adb install -r` as long as the key stays the same.
   throwaway key per run. The release notes say which. Changing key, or
   going between a CI build and a local `just android` build (different debug
   keys), needs an uninstall, which deletes saved runs.
+
+## README and project page (2026-10-18)
+
+- `site/` is a one-page project site and a licenses page, modelled on Salt
+  Line's. Its game images are the renderer's golden frames, painted by
+  `tools/build_site.py` (standard library only: it runs
+  `dump_golden_frames` and writes indexed PNG files in the 16 colours, failing
+  on any other colour), so the page follows the renderer without screenshots.
+  The README's three captures (`docs/screens/`) are Pixel 10 screenshots
+  scaled to 2x the buffer.
+- `pages.yml` builds the site on pull requests and `main` pushes that touch it
+  and uploads it as the `site` artifact. Deploying is off while the game is
+  unnamed: enable Pages with GitHub Actions as the source and set the
+  repository variable `PAGES_DEPLOY=on` to publish.
+- `LICENSE` (MIT, matching `license = "MIT"` in Cargo.toml) and
+  `third_party/` (Godot, gdext, glam, libc notices) were added for the
+  licenses page.
