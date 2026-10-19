@@ -50,14 +50,14 @@ HERO = ("sweep_mid_curve", "drift_corner_signed", "crest_over")
 
 # ------------------------------------------------------------- the palette
 def palette():
-    """The sixteen colours, read from palette.rs so the site cannot drift
-    from the game. Returns a list of (r, g, b) in index order."""
+    """The sixteen colours (the meadow's: every site frame is a meadow),
+    read from palette.rs so the site cannot drift from the game. Returns a list of (r, g, b) in index order."""
     with open(
         os.path.join(ROOT, "crates", "racer-godot", "src", "palette.rs"),
         encoding="utf-8",
     ) as f:
         src = f.read()
-    body = re.search(r"pub const COLOURS: \[Rgba; 16\] = \[(.*?)\];", src, re.S)
+    body = re.search(r"pub const COLOURS: (?:Palette|\[Rgba; 16\]) = \[(.*?)\];", src, re.S)
     if not body:
         sys.exit("build_site: COLOURS not found in palette.rs")
     cols = [
