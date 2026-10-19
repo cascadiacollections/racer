@@ -21,10 +21,14 @@ on:
       - 'site/**'
       - 'tools/build_site.py'
       # What the golden frames are painted from: the renderer, its sprites,
-      # font, palette, projection and layout, and the sim's track fixtures.
+      # font, palette, scenery, projection and layout, the screens, and the
+      # sim's track fixtures.
       - 'crates/racer-godot/src/render.rs'
       - 'crates/racer-godot/src/palette.rs'
-      - 'crates/racer-godot/src/sprites.rs'
+      - 'crates/racer-godot/src/sprites/**'
+      - 'crates/racer-godot/src/scenery.rs'
+      - 'crates/racer-godot/src/season.rs'
+      - 'crates/racer-godot/src/screens.rs'
       - 'crates/racer-godot/src/raster.rs'
       - 'crates/racer-godot/src/font.rs'
       - 'crates/racer-godot/src/project.rs'
@@ -43,10 +47,14 @@ on:
       - 'site/**'
       - 'tools/build_site.py'
       # What the golden frames are painted from: the renderer, its sprites,
-      # font, palette, projection and layout, and the sim's track fixtures.
+      # font, palette, scenery, projection and layout, the screens, and the
+      # sim's track fixtures.
       - 'crates/racer-godot/src/render.rs'
       - 'crates/racer-godot/src/palette.rs'
-      - 'crates/racer-godot/src/sprites.rs'
+      - 'crates/racer-godot/src/sprites/**'
+      - 'crates/racer-godot/src/scenery.rs'
+      - 'crates/racer-godot/src/season.rs'
+      - 'crates/racer-godot/src/screens.rs'
       - 'crates/racer-godot/src/raster.rs'
       - 'crates/racer-godot/src/font.rs'
       - 'crates/racer-godot/src/project.rs'

@@ -2,11 +2,13 @@
 """Racer: the project site's images and its licenses page.
 
 Every picture on the site is a frame the game's own renderer painted. The
-golden frames (`golden_scenes` in crates/racer-godot/src/render.rs, whose
-digests the test suite pins) are dumped as PPM by an ignored test, then
-written here as indexed PNG files: the sixteen colours of palette.rs, integer
-nearest-neighbour scaling only, nothing blended. A pixel that is not a
-palette colour fails the build rather than being quietly re-quantised.
+golden frames (`golden_scenes` in crates/racer-godot/src/render.rs, and the
+golden screens in screens.rs, whose digests the test suite pins) are dumped
+as PPM by ignored tests, then written here as indexed PNG files: integer
+nearest-neighbour scaling only, nothing blended. Every frame must be painted
+entirely in one of the game's sixteen-colour tables (palette.rs: the meadow's
+COLOURS, each biome's, each Halloween twin's); a pixel that is in none of
+them fails the build rather than being quietly re-quantised.
 
     python3 tools/build_site.py       # needs Rust; writes into site/
 
@@ -18,6 +20,9 @@ Fedora's zlib-ng and Ubuntu's zlib; the pixels do not.)
 Outputs:
     site/assets/frames/<scene>.png    each golden frame, 2x
     site/assets/hero.png              three frames side by side, 2x
+    site/assets/biomes.png            the five biomes' road views, 2x
+    site/assets/twins.png             their five Halloween twins, 2x
+    site/assets/frames/screen_*.png   golden screens (title, daily, editor), 2x
     site/assets/palette_16.png        the palette, in index order
     site/assets/og.png                1200x630 social card
     site/assets/favicon.png           the car, 64x64 (32x32 at 2x)
@@ -44,33 +49,74 @@ SCENES = (
     "crest_climbing",
     "crest_over",
     "hazards",
+    # The five biomes and their Halloween twins (DESIGN §5.1, §5.2).
+    "biome_meadow",
+    "biome_coast",
+    "biome_alpine",
+    "biome_desert",
+    "biome_night",
+    "twin_pumpkin_patch",
+    "twin_ghost_cove",
+    "twin_haunted_pines",
+    "twin_blood_moon_mesa",
+    "twin_monster_city",
 )
+# Golden screens (screens.rs's `screens()`), dumped as screen_<name>.ppm.
+SCREENS = (
+    "screen_title",
+    "screen_title_daily",
+    "screen_title_halloween",
+    "screen_tracks",
+    "screen_editor_bend",
+)
+BIOMES = SCENES[6:11]
+TWINS = SCENES[11:16]
 HERO = ("sweep_mid_curve", "drift_corner_signed", "crest_over")
 
 
 # ------------------------------------------------------------- the palette
-def palette():
-    """The sixteen colours (the meadow's: every site frame is a meadow),
-    read from palette.rs so the site cannot drift from the game. Returns a list of (r, g, b) in index order."""
+def palettes():
+    """Every sixteen-colour table in palette.rs, read from the source so the
+    site cannot drift from the game: the meadow's COLOURS first, then each
+    biome's and twin's (COLOURS with its six scenery indices replaced).
+    Returns {name: [(r, g, b), ...]} in index order."""
     with open(
         os.path.join(ROOT, "crates", "racer-godot", "src", "palette.rs"),
         encoding="utf-8",
     ) as f:
         src = f.read()
+    rgb = r"\[(\d+), (\d+), (\d+), 255\]"
+
+    def colours(text):
+        return [tuple(int(v) for v in m.groups()) for m in re.finditer(rgb, text)]
+
     body = re.search(r"pub const COLOURS: (?:Palette|\[Rgba; 16\]) = \[(.*?)\];", src, re.S)
     if not body:
         sys.exit("build_site: COLOURS not found in palette.rs")
-    cols = [
-        tuple(int(v) for v in m.groups())
-        for m in re.finditer(r"\[(\d+), (\d+), (\d+), 255\]", body.group(1))
-    ]
-    if len(cols) != 16 or len(set(cols)) != 16:
+    meadow = colours(body.group(1))
+    if len(meadow) != 16 or len(set(meadow)) != 16:
         sys.exit("build_site: expected 16 distinct opaque colours in palette.rs")
-    return cols
+    out = {"COLOURS": meadow}
+    # biome_palette's argument order: grass dk, grass lt, sky hi, sky lo,
+    # hills, brown.
+    scenery = (6, 7, 8, 9, 10, 15)
+    for m in re.finditer(r"pub const (\w+): Palette = biome_palette\(\[(.*?)\]\);", src, re.S):
+        six = colours(m.group(2))
+        if len(six) != 6:
+            sys.exit(f"build_site: {m.group(1)} has {len(six)} scenery colours, not 6")
+        pal = list(meadow)
+        for i, c in zip(scenery, six):
+            pal[i] = c
+        if len(set(pal)) != 16:
+            sys.exit(f"build_site: {m.group(1)} has repeated colours")
+        out[m.group(1)] = pal
+    if len(out) < 10:
+        sys.exit(f"build_site: found {len(out)} palettes in palette.rs, expected 10")
+    return out
 
 
-PAL = palette()
-INDEX = {c: i for i, c in enumerate(PAL)}
+PALETTES = palettes()
+PAL = PALETTES["COLOURS"]
 INK, WHITE, RED, YELLOW = 0, 3, 4, 14
 
 
@@ -78,9 +124,12 @@ INK, WHITE, RED, YELLOW = 0, 3, 4, 14
 class Img:
     """An image of palette indices, one bytearray row per line."""
 
-    def __init__(self, w, h, fill=INK):
+    def __init__(self, w, h, fill=INK, pal=None):
         self.w, self.h = w, h
         self.rows = [bytearray([fill]) * w for _ in range(h)]
+        # The colours the indices name: one game palette, or (for a picture
+        # pasted together from several) their union, at most 256.
+        self.pal = list(pal or PAL)
 
     @staticmethod
     def from_ppm(path):
@@ -93,28 +142,50 @@ class Img:
         px = data[m.end():]
         if len(px) != w * h * 3:
             sys.exit(f"build_site: {path} is truncated")
-        img = Img(w, h)
+        used = {(px[o], px[o + 1], px[o + 2]) for o in range(0, len(px), 3)}
+        name = next((n for n, p in PALETTES.items() if used <= set(p)), None)
+        if name is None:
+            best = max(PALETTES.values(), key=lambda p: len(used & set(p)))
+            stray = sorted(used - set(best))[0]
+            sys.exit(f"build_site: {path}: {stray} is in none of the game's palettes")
+        pal = PALETTES[name]
+        index = {c: i for i, c in enumerate(pal)}
+        img = Img(w, h, pal=pal)
         for y in range(h):
             row = img.rows[y]
             for x in range(w):
                 o = (y * w + x) * 3
-                c = (px[o], px[o + 1], px[o + 2])
-                if c not in INDEX:
-                    sys.exit(f"build_site: {path} ({x}, {y}) {c} is not a palette colour")
-                row[x] = INDEX[c]
+                row[x] = index[(px[o], px[o + 1], px[o + 2])]
         return img
 
     def crop(self, x, y, w, h):
-        out = Img(w, h)
+        out = Img(w, h, pal=self.pal)
         out.rows = [bytearray(r[x:x + w]) for r in self.rows[y:y + h]]
         return out
 
     def paste(self, src, x, y):
+        if src.pal != self.pal:
+            # Another palette: map its indices onto this picture's colours,
+            # adding the ones it lacks.
+            remap = bytearray(len(src.pal))
+            for i, c in enumerate(src.pal):
+                if c not in self.pal:
+                    self.pal.append(c)
+                remap[i] = self.pal.index(c)
+            if len(self.pal) > 256:
+                sys.exit("build_site: more than 256 colours in one picture")
+            src = Img(src.w, src.h, pal=self.pal)._with_rows(
+                [r.translate(bytes(remap) + bytes(256 - len(remap))) for r in src.rows]
+            )
         for j, row in enumerate(src.rows):
             if 0 <= y + j < self.h:
                 lo, hi = max(0, -x), min(src.w, self.w - x)
                 if lo < hi:
                     self.rows[y + j][x + lo:x + hi] = row[lo:hi]
+
+    def _with_rows(self, rows):
+        self.rows = rows
+        return self
 
     def rect(self, x, y, w, h, c):
         for j in range(max(0, y), min(self.h, y + h)):
@@ -123,7 +194,7 @@ class Img:
             )
 
     def scaled(self, k):
-        out = Img(self.w * k, self.h * k)
+        out = Img(self.w * k, self.h * k, pal=self.pal)
         out.rows = []
         for r in self.rows:
             wide = bytearray(b for b in r for _ in range(k))
@@ -146,7 +217,7 @@ class Img:
         data = (
             b"\x89PNG\r\n\x1a\n"
             + chunk(b"IHDR", struct.pack(">IIBBBBB", self.w, self.h, 8, 3, 0, 0, 0))
-            + chunk(b"PLTE", b"".join(bytes(c) for c in PAL))
+            + chunk(b"PLTE", b"".join(bytes(c) for c in self.pal))
             + chunk(b"IDAT", zlib.compress(raw, 9))
             + chunk(b"IEND", b"")
         )
@@ -157,17 +228,19 @@ class Img:
 
 # ----------------------------------------------------------------- frames
 def dump_frames():
-    """Have the renderer paint its golden scenes into target/frames."""
-    subprocess.run(
-        [
-            "cargo", "test", "--quiet", "-p", "racer-godot", "--lib",
-            "render::tests::dump_golden_frames", "--", "--ignored", "--exact",
-        ],
-        cwd=ROOT,
-        check=True,
-    )
+    """Have the renderer paint its golden scenes and screens into
+    target/frames."""
+    for test in ("render::tests::dump_golden_frames", "screens::tests::dump_screens"):
+        subprocess.run(
+            [
+                "cargo", "test", "--quiet", "-p", "racer-godot", "--lib",
+                test, "--", "--ignored", "--exact",
+            ],
+            cwd=ROOT,
+            check=True,
+        )
     frames = {}
-    for name in SCENES:
+    for name in SCENES + SCREENS:
         path = os.path.join(FRAMES, name + ".ppm")
         if not os.path.exists(path):
             sys.exit(f"build_site: the renderer wrote no {name}.ppm; "
@@ -214,14 +287,14 @@ def car_box(img):
 
 
 # ------------------------------------------------------------------ media
-def hero(frames):
-    """Three road views side by side, cropped to the same height, with a
+def hero(frames, names=HERO):
+    """Road views side by side, cropped to the same height, with a
     two-pixel ink gutter."""
-    views = [frames[n] for n in HERO]
+    views = [frames[n] for n in names]
     h = min(road_rows(v) for v in views)
     gap = 2
     w = sum(v.w for v in views) + gap * (len(views) - 1)
-    out = Img(w, h)
+    out = Img(w, h, pal=views[0].pal)
     x = 0
     for v in views:
         out.paste(v.crop(0, road_rows(v) - h, v.w, h), x, 0)
@@ -318,11 +391,15 @@ dependencies at all.</p>
 # ------------------------------------------------------------------ driver
 def main():
     frames = dump_frames()
-    for name in SCENES:
+    for name in SCENES + SCREENS:
         frames[name].scaled(2).png(os.path.join(OUT, "frames", name + ".png"))
         print(f"frames/{name}.png ({frames[name].w}x{frames[name].h}, 2x)")
     hero(frames).png(os.path.join(OUT, "hero.png"))
     print("hero.png")
+    hero(frames, BIOMES).png(os.path.join(OUT, "biomes.png"))
+    print("biomes.png")
+    hero(frames, TWINS).png(os.path.join(OUT, "twins.png"))
+    print("twins.png")
     palette_strip().png(os.path.join(OUT, "palette_16.png"))
     print("palette_16.png")
     og_card(frames).png(os.path.join(OUT, "og.png"))
