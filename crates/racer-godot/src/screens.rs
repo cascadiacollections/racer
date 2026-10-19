@@ -27,6 +27,7 @@ pub fn frame(g: &mut Game, c: &mut Canvas, art: &Art) -> Vec<Button> {
         Mode::Racing => racing(g, c, art, &l),
         Mode::Fork => fork(g, c, &l),
         Mode::Results => results(g, c, &l),
+        Mode::Editor => crate::editor::draw::frame(&g.editor, c, &l, g.clock),
     }
 }
 
@@ -98,13 +99,18 @@ fn title(g: &Game, c: &mut Canvas, art: &Art, l: &Layout) -> Vec<Button> {
     }
     let m = 6;
     let start = Rect::new(m, p.y + m, l.w - 2 * m, 46);
+    let row = start.y + start.h + 6;
+    let row_h = p.h - start.h - 2 * m - 6;
+    // TRACKS: the bundled courses, your layouts and the editor.
+    let tracks = Rect::new(m, row, 100, row_h);
     let demo = Rect::new(
-        m,
-        start.y + start.h + 6,
-        l.w - 2 * m,
-        p.h - start.h - 2 * m - 6,
+        tracks.x + tracks.w + 6,
+        row,
+        l.w - m - (tracks.x + tracks.w + 6),
+        row_h,
     );
     labelled(c, &mut out, start, "START", Action::Start, true);
+    labelled(c, &mut out, tracks, "TRACKS", Action::Tracks, false);
     labelled(c, &mut out, demo, "DEMO", Action::Demo, false);
     out
 }
@@ -126,14 +132,28 @@ fn racing(g: &Game, c: &mut Canvas, art: &Art, l: &Layout) -> Vec<Button> {
         return out;
     }
     if g.paused {
-        let r = Rect::new(16, 50, l.w - 32, 120);
+        let fork = g.can_fork();
+        let r = Rect::new(16, 50, l.w - 32, if fork { 162 } else { 120 });
         c.rect(r.x, r.y, r.w, r.h, INK);
         c.rect_outline(r.x, r.y, r.w, r.h, ASPHALT_LT);
         banner(c, l.w / 2, r.y + 10, "PAUSED", WHITE, 2);
         let resume = Rect::new(r.x + 10, r.y + 34, r.w - 20, 34);
         let quit = Rect::new(r.x + 10, r.y + 76, r.w - 20, 34);
         labelled(c, &mut out, resume, "RESUME", Action::Resume, true);
-        labelled(c, &mut out, quit, "QUIT", Action::Quit, false);
+        let test = g.custom.as_ref().is_some_and(|cu| cu.test);
+        labelled(
+            c,
+            &mut out,
+            quit,
+            if test { "EDITOR" } else { "QUIT" },
+            Action::Quit,
+            false,
+        );
+        if fork {
+            // The track on screen, into the editor (DESIGN §9.11).
+            let f = Rect::new(r.x + 10, r.y + 118, r.w - 20, 34);
+            labelled(c, &mut out, f, "FORK TRACK", Action::ForkTrack, false);
+        }
         return out;
     }
     // The pause button: top-left of the road view.
@@ -384,6 +404,9 @@ fn results(g: &Game, c: &mut Canvas, l: &Layout) -> Vec<Button> {
             &cu.layout.name
         };
         c.text(10, 142, &format!("{name}  {what}"), ASPHALT_LT, 1);
+    } else {
+        // The seed, to fork any of its tracks FROM SEED.
+        c.text(10, 142, &format!("SEED {}", run.run_seed()), ASPHALT_LT, 1);
     }
     let r = Rect::new(6, l.bottom() - 52, l.w - 12, 46);
     if !g.demo() {
@@ -403,11 +426,24 @@ fn results(g: &Game, c: &mut Canvas, l: &Layout) -> Vec<Button> {
             g.results_sel == 1,
         );
     }
+    if g.can_fork() {
+        // The track just raced, into the editor (DESIGN §9.11).
+        let fork = Rect::new(6, r.y - 80, l.w - 12, 34);
+        labelled(
+            c,
+            &mut out,
+            fork,
+            "FORK TRACK",
+            Action::ForkTrack,
+            g.results_sel == 2,
+        );
+    }
+    let test = g.custom.as_ref().is_some_and(|cu| cu.test);
     labelled(
         c,
         &mut out,
         r,
-        "CONTINUE",
+        if test { "EDITOR" } else { "CONTINUE" },
         Action::Continue,
         g.results_sel == 0,
     );
@@ -486,6 +522,102 @@ mod tests {
         assert_eq!(g.mode, Mode::Results);
         assert!(has(&b, Action::Continue) && has(&b, Action::Retry));
         out.push(("time_up", c));
+        out.extend(editor_screens());
+        out
+    }
+
+    /// A press of the editor button `a`, wherever it is drawn.
+    fn press(g: &mut Game, b: &[Button], a: crate::editor::Act) -> (Canvas, Vec<Button>) {
+        let r = b
+            .iter()
+            .rev()
+            .find(|x| x.action == Action::Edit(a))
+            .unwrap_or_else(|| panic!("{a:?}"))
+            .rect;
+        let (x, y) = ((r.x + r.w / 2) as f32, (r.y + r.h / 2) as f32);
+        step(g, vec![Event::FingerDown { index: 0, x, y }]);
+        step(g, vec![Event::FingerUp { index: 0 }])
+    }
+
+    /// The editor's pages (DESIGN §9.11), on RIDGE RUN, for the golden
+    /// digests and the site.
+    pub(crate) fn editor_screens() -> Vec<(&'static str, Canvas)> {
+        use crate::editor::{Act, Item, Tool};
+        use racer_sim::layout::ProveError;
+        use racer_sim::solver::Failure;
+        let builder =
+            Inline::new(|_: crate::builder::Key| fixtures::drag_strip()).proving_with(|_| {
+                Err(ProveError::Failed(
+                    Failure::Margins {
+                        passes: 12,
+                        section: 1,
+                    },
+                    0,
+                ))
+            });
+        let hold = builder.hold.clone();
+        let mut g = Game::new(Box::new(builder));
+        let mut s = crate::editor::store::Slots::default();
+        s.put(
+            1,
+            &racer_sim::layout::bundled::layouts()[3].unproven(),
+            None,
+        );
+        g.load_layouts(s.encode().as_deref(), None);
+        let mut out = Vec::new();
+        step(&mut g, vec![]);
+        let (_, b) = step(&mut g, vec![Event::Key(Key::Char(b'T'))]);
+        assert_eq!(g.mode, Mode::Editor);
+        press(&mut g, &b, Act::Row(1));
+        let (c, b) = step(&mut g, vec![]);
+        assert!(has(&b, Action::Edit(Act::Item(Item::TestDrive))));
+        out.push(("tracks", c));
+        // EDIT RIDGE RUN, the sixth run, the bend.
+        press(&mut g, &b, Act::Item(Item::Name));
+        for _ in 0..5 {
+            step(&mut g, vec![Event::Key(Key::Right)]);
+        }
+        let (c, b) = step(&mut g, vec![]);
+        out.push(("editor_bend", c));
+        // A hill on it: proof gone, a draft. PROVE: held on the worker.
+        let (_, b) = press(&mut g, &b, Act::Tool(Tool::Hill));
+        let (_, b) = press(&mut g, &b, Act::Plus);
+        let (_, b) = press(&mut g, &b, Act::Plus);
+        hold.set(true);
+        press(&mut g, &b, Act::Prove);
+        let (c, b) = step(&mut g, vec![]);
+        out.push(("editor_proving", c));
+        // The worker says no: the words, over the map.
+        hold.set(false);
+        step(&mut g, vec![]);
+        press(&mut g, &b, Act::Tool(Tool::Objects));
+        let (c, b) = step(&mut g, vec![]);
+        out.push(("editor_failed", c));
+        press(&mut g, &b, Act::Menu);
+        let (c, b) = step(&mut g, vec![]);
+        out.push(("editor_menu", c));
+        press(&mut g, &b, Act::Item(Item::Save));
+        let (c, b) = step(&mut g, vec![]);
+        out.push(("editor_save", c));
+        let (_, b) = press(&mut g, &b, Act::Back);
+        let (_, _) = press(&mut g, &b, Act::Item(Item::Name));
+        for _ in 0..4 {
+            step(&mut g, vec![Event::Key(Key::Backspace)]);
+        }
+        for k in *b"2X2" {
+            step(&mut g, vec![Event::Key(Key::Char(k))]);
+        }
+        let (c, b) = step(&mut g, vec![]);
+        out.push(("editor_name", c));
+        let (_, b) = press(&mut g, &b, Act::Back);
+        let (_, _) = press(&mut g, &b, Act::Item(Item::Seed));
+        for k in b"20261018" {
+            step(&mut g, vec![Event::Key(Key::Char(*k))]);
+        }
+        step(&mut g, vec![Event::Key(Key::Right)]);
+        step(&mut g, vec![Event::Key(Key::Right)]);
+        let (c, _) = step(&mut g, vec![]);
+        out.push(("editor_seed", c));
         out
     }
 

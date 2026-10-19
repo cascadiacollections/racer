@@ -28,6 +28,12 @@ pub enum Key {
     Enter,
     Escape,
     P,
+    /// A letter or digit typed, upper case (`b'A'`..`b'Z'`, `b'0'`..`b'9'`):
+    /// sent beside the named keys above, for typing names and seeds and
+    /// for the editor's shortcuts.
+    Char(u8),
+    /// Backspace: delete the last character typed.
+    Backspace,
 }
 
 /// Pad buttons the game reads (Godot's SDL layout: `South` is Xbox A).

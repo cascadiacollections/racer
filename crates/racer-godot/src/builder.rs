@@ -16,6 +16,8 @@
 //! only calls into `racer-sim`; it never touches the engine (gdext's
 //! `lazy-function-tables` forbids engine calls off the main thread).
 
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 
@@ -131,8 +133,9 @@ pub struct Inline<F: FnMut(Key) -> Track> {
     queue: Vec<Key>,
     to_prove: Vec<(u64, Layout)>,
     prover: Option<ProveFn>,
-    /// Hold proofs back until [`Inline::release`]: a slow worker.
-    pub hold: bool,
+    /// While set, proofs are held back: a slow worker. Shared, so a test can
+    /// let them go after handing the builder to a game.
+    pub hold: Rc<Cell<bool>>,
 }
 
 impl<F: FnMut(Key) -> Track> Inline<F> {
@@ -143,7 +146,7 @@ impl<F: FnMut(Key) -> Track> Inline<F> {
             queue: Vec::new(),
             to_prove: Vec::new(),
             prover: None,
-            hold: false,
+            hold: Rc::new(Cell::new(false)),
         }
     }
 
@@ -173,7 +176,7 @@ impl<F: FnMut(Key) -> Track> Build for Inline<F> {
     }
 
     fn proofs(&mut self) -> Vec<(u64, Proved)> {
-        if self.hold {
+        if self.hold.get() {
             return Vec::new();
         }
         std::mem::take(&mut self.to_prove)

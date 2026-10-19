@@ -324,14 +324,14 @@ mod tests {
     fn prove_runs_on_the_worker_and_lands_on_the_road_it_was_made_for() {
         let draft = course().unproven();
         let mut w = worker();
-        w.hold = true;
+        w.hold.set(true);
         let mut p = Prover::default();
         assert!(p.prove(&draft, &mut w));
         assert_eq!(p.state, ProofState::Proving(1));
         assert_eq!(p.badge(), "PROVING...");
         assert!(!p.prove(&draft, &mut w), "one at a time");
         assert!(w.proofs().is_empty(), "the worker is slow: nothing yet");
-        w.hold = false;
+        w.hold.set(false);
         let (job, result) = w.proofs().remove(0);
         match p.finished(job, result, &draft) {
             Some(Outcome::Proven(l)) => {
