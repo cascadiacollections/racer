@@ -475,7 +475,8 @@ impl Racer {
 }
 
 impl Racer {
-    /// Act on the developer flags (`cli.rs`): `--racer-layout` starts a
+    /// Act on the developer flags (`cli.rs`): `--racer-season` forces a
+    /// season on or off; `--racer-layout` starts a
     /// custom race on a code or a layout file. The layout is verified
     /// (proven again, tens of milliseconds) before it races timed.
     fn dev_flags(&mut self) {
@@ -488,6 +489,10 @@ impl Racer {
             .map(|s| s.to_string())
             .collect();
         let dev = crate::cli::DevArgs::parse(&args);
+        if let Some(season) = dev.season {
+            godot_print!("racer: --racer-season: {season:?}");
+            self.g.forced_season = Some(season);
+        }
         let Some(arg) = dev.layout else { return };
         let path = ProjectSettings::singleton()
             .globalize_path(&arg)

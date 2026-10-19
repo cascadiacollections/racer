@@ -87,6 +87,7 @@ use crate::editor::{Act, Editor, Out};
 use crate::input::{bind, pressed, Controls, Event, Intents, SteerRamp};
 use crate::layout::{buffer_size, inset_rows, Layout, H_MIN};
 use crate::render::{Decor, Held};
+use crate::season::{Look, Season};
 use crate::touch::{Action, Button, TouchPad};
 
 /// The longest frame the clock accepts, seconds. A longer gap (a hitch, a
@@ -244,6 +245,9 @@ pub struct Game {
     pub daily: Option<u64>,
     /// Today's daily tries and best.
     pub daily_record: DailyRecord,
+    /// A season forced on or off by `--racer-season` (DESIGN §5.2),
+    /// whatever today is.
+    pub forced_season: Option<Season>,
 }
 
 /// Seconds the title shows each biome before the next.
@@ -253,6 +257,24 @@ impl Game {
     /// The biome behind the title screen now: each in turn, from the meadow.
     pub fn title_biome(&self) -> Biome {
         Biome::ALL[(self.clock / TITLE_BIOME_SECS) as usize % Biome::ALL.len()]
+    }
+
+    /// The season now (DESIGN §5.2): the flag's, else today's (the daily's
+    /// UTC day), else none. Presentation only: nothing simulated, stored
+    /// or shared reads it.
+    pub fn season(&self) -> Season {
+        Season::resolve(self.forced_season, self.today)
+    }
+
+    /// How biome `b` is painted now: its twin in a season.
+    pub fn look(&self, b: Biome) -> Look {
+        Look::of(b, self.season())
+    }
+
+    /// A presentation clock for the scenery's animation (bats), 30 steps
+    /// a second from launch: never the sim's tick.
+    pub fn anim(&self) -> u32 {
+        (self.clock * 30.0) as u32
     }
 
     /// A game on its title screen, building tracks with `builder`.
@@ -302,6 +324,7 @@ impl Game {
             today: None,
             daily: None,
             daily_record: DailyRecord::default(),
+            forced_season: None,
         }
     }
 

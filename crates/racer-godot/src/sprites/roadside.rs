@@ -486,17 +486,27 @@ pub fn cactus() -> Steps {
 /// to the left (over the road when it stands right of it; mirrored on the
 /// left) and a lit lamp throwing a dithered cone of light below it.
 pub fn lamp() -> Steps {
+    lamp_lit([YELLOW, WHITE, ASPHALT_LT, ASPHALT_DK])
+}
+
+/// MONSTER CITY's street light: the same, black, throwing a green light.
+pub fn green_lamp() -> Steps {
+    lamp_lit([SKY_LO, ICE, ASPHALT_DK, INK])
+}
+
+/// A street light in `[light, its core, the post lit, the post shaded]`.
+fn lamp_lit([light, core, lit, shade]: [u8; 4]) -> Steps {
     draw(
         3.0,
         8.0,
         |p| {
             let post = (p.x - 2.55).abs() < 0.13 + if p.y > 7.4 { 0.12 } else { 0.0 };
             if post && p.y > 0.3 {
-                return if p.x > 2.6 { ASPHALT_DK } else { ASPHALT_LT };
+                return if p.x > 2.6 { shade } else { lit };
             }
             // The arm, curving from the post's top.
             if p.y > 0.25 && p.y < 0.25 + 1.0 / p.s.max(1.0) + 0.1 && p.x > 0.6 && p.x < 2.7 {
-                return ASPHALT_LT;
+                return lit;
             }
             // The lamp head: a dark hood over the light.
             if p.x > 0.35 && p.x < 1.25 {
@@ -505,9 +515,9 @@ pub fn lamp() -> Steps {
                 }
                 if p.y >= 0.45 && p.y < 0.65 {
                     return if p.x > 0.55 && p.x < 1.05 {
-                        WHITE
+                        core
                     } else {
-                        YELLOW
+                        light
                     };
                 }
             }
@@ -519,7 +529,7 @@ pub fn lamp() -> Steps {
                 if k < 1.0 && (p.x - 0.8).abs() < half {
                     let frac = (4.0 * (1.0 - k)).ceil() as u8;
                     if crate::raster::dither_on(p.px, p.py, frac) && p.x < 1.45 {
-                        return YELLOW;
+                        return light;
                     }
                 }
             }
@@ -530,6 +540,332 @@ pub fn lamp() -> Steps {
     )
 }
 
+// --------------------------------------------------------------- Halloween
+//
+// The twins' roadside things (DESIGN §5.2): the same sizes as the things
+// they stand in for, so nothing about where the sim's posts and rocks are,
+// or how big, changes.
+
+/// A capsule from `(x0, y0)` to `(x1, y1)` of radius `r`: the light on it
+/// at this pixel (lit upper left), or `None` outside it.
+fn capsule(p: &Px, (x0, y0, x1, y1, r): (f64, f64, f64, f64, f64)) -> Option<f64> {
+    let (vx, vy) = (x1 - x0, y1 - y0);
+    let len2 = (vx * vx + vy * vy).max(1e-9);
+    let t = (((p.x - x0) * vx + (p.y - y0) * vy) / len2).clamp(0.0, 1.0);
+    let (dx, dy) = (p.x - x0 - vx * t, p.y - y0 - vy * t);
+    // Thin limbs stay at least a pixel wide at every size.
+    let r = r.max(0.5 / p.s);
+    (dx * dx + dy * dy <= r * r).then(|| -(dx / r) * 0.8 - (dy / r) * 0.3)
+}
+
+/// A jack-o'-lantern on a dark stake: the marker post's Halloween paint,
+/// its size. The pumpkin is red going orange (a red and yellow
+/// checkerboard) on its lit side, its face cut out and glowing yellow.
+pub fn lantern_post() -> Steps {
+    draw(
+        0.4,
+        1.4,
+        |p| {
+            if p.y < 0.5 {
+                if p.w < 3 {
+                    return if p.y < 0.25 { YELLOW } else { RED };
+                }
+                // The stem.
+                if p.y < 0.08 {
+                    return if p.px * 2 + 1 == p.w || p.px * 2 == p.w {
+                        BROWN
+                    } else {
+                        C
+                    };
+                }
+                let edge = p.px == 0 || p.px + 1 == p.w;
+                let face = !edge && (p.y > 0.18 && p.y < 0.24 || p.y > 0.32 && p.y < 0.4);
+                return if face {
+                    YELLOW
+                } else if edge {
+                    RED_DK
+                } else {
+                    p.check(RED, YELLOW)
+                };
+            }
+            let right = p.px + 1 == p.w && p.w >= 2;
+            if right {
+                INK
+            } else {
+                BROWN
+            }
+        },
+        i32::MAX,
+        ink_edge,
+    )
+}
+
+/// Two pumpkins, a big jack-o'-lantern and a small plain one: a rock's
+/// Halloween paint (PUMPKIN PATCH, BLOOD MOON MESA), its size.
+pub fn pumpkins() -> Steps {
+    draw(
+        2.2,
+        1.3,
+        |p| {
+            let a = p.ball(0.9, 0.78, 0.62).map(|l| (l, 0.9));
+            let b = p.ball(1.72, 0.98, 0.38).map(|l| (l, 1.72));
+            let Some((l, cx)) = a.or(b) else {
+                // Stems.
+                let stem = |x: f64, top: f64| (p.x - x).abs() < 0.07 && p.y > top;
+                return if stem(0.92, 0.06) && p.y < 0.2 || stem(1.74, 0.5) && p.y < 0.62 {
+                    BROWN
+                } else {
+                    C
+                };
+            };
+            // The big one's face, glowing: two eyes and a jagged grin.
+            if a.is_some() && p.w >= 9 {
+                let (dx, dy) = (p.x - 0.9, p.y - 0.78);
+                let eye = (dx.abs() - 0.22).abs() < 0.09 && (-0.24..-0.06).contains(&dy);
+                let grin = dx.abs() < 0.36
+                    && dy > 0.1
+                    && dy
+                        < 0.24
+                            + if (dx * 9.0).rem_euclid(1.0) < 0.5 {
+                                0.0
+                            } else {
+                                -0.08
+                            };
+                if eye || grin {
+                    return YELLOW;
+                }
+            }
+            // Ribs, shaded on their right.
+            if p.w >= 14 && ((p.x - cx) * 5.0).rem_euclid(1.0) < 0.18 {
+                return if l > 0.2 { RED } else { RED_DK };
+            }
+            if l > 0.35 {
+                p.check(YELLOW, RED)
+            } else {
+                p.tone(l, [RED, RED, RED_DK])
+            }
+        },
+        6,
+        |_| INK,
+    )
+}
+
+/// A gravestone and a leaning cross: a rock's Halloween paint (GHOST
+/// COVE, HAUNTED PINES, MONSTER CITY), its size. Grey stone lit from the
+/// left on a low mound.
+pub fn gravestone() -> Steps {
+    draw(
+        2.2,
+        1.3,
+        |p| {
+            // The mound.
+            if p.y > 1.12 && p.x > 0.15 && p.x < 2.05 {
+                return BROWN;
+            }
+            // The headstone: a slab with a round top.
+            let (x0, x1, top) = (0.3, 1.25, 0.22);
+            let r = (x1 - x0) / 2.0;
+            let cx = (x0 + x1) / 2.0;
+            let in_slab = p.x >= x0 && p.x < x1 && p.y >= top + r;
+            let in_top = (p.x - cx).powi(2) + (p.y - top - r).powi(2) <= r * r;
+            if in_slab || in_top {
+                // Its inscription, a cross, from mid sizes.
+                if p.w >= 14 {
+                    let (dx, dy) = (p.x - cx, p.y - 0.62);
+                    if (dx.abs() < 0.05 && dy.abs() < 0.22) || (dy.abs() < 0.04 && dx.abs() < 0.14)
+                    {
+                        return INK;
+                    }
+                }
+                let l = -(p.x - cx) / r - 0.1;
+                return p.tone(l, [ASPHALT_LT, ASPHALT_DK, INK]);
+            }
+            // A wooden cross, leaning right.
+            let lean = (1.12 - p.y) * 0.18;
+            let (dx, dy) = (p.x - 1.72 - lean, p.y - 0.62);
+            if (dx.abs() < 0.07 && (-0.3..0.5).contains(&dy))
+                || (dy.abs() < 0.06 && dx.abs() < 0.22)
+            {
+                return if dx > 0.02 { INK } else { BROWN };
+            }
+            C
+        },
+        6,
+        ink_edge,
+    )
+}
+
+/// PUMPKIN PATCH's scarecrow: a sack head under a black pointed hat, arms
+/// out on a crossbar in a red checked shirt, straw at the cuffs, on a pole.
+pub fn scarecrow() -> Steps {
+    draw(
+        3.6,
+        6.4,
+        |p| {
+            let cx = 1.8;
+            let dx = p.x - cx;
+            // The hat: a brim and a bent cone.
+            if p.y > 0.95 && p.y < 1.15 && dx.abs() < 0.75 {
+                return INK;
+            }
+            if p.y <= 0.95 && dx.abs() < (p.y - 0.1).max(0.0) * 0.45 + 0.04 {
+                return if dx > 0.1 { INK } else { HILLS };
+            }
+            // The head: a sack, two stitched eyes and a mouth.
+            if let Some(l) = p.ball(cx, 1.55, 0.45) {
+                if p.w >= 14 {
+                    let (ex, ey) = (dx.abs(), p.y - 1.5);
+                    if (ex - 0.17).abs() < 0.07 && ey.abs() < 0.07 {
+                        return INK;
+                    }
+                    if p.y > 1.7 && p.y < 1.77 && ex < 0.22 {
+                        return INK;
+                    }
+                }
+                return p.tone(l, [GRAVEL, GRAVEL, BROWN]);
+            }
+            // The shirt: shoulders to the cuffs, and a body, checked.
+            let arm = p.y > 2.05 && p.y < 2.6 && dx.abs() < 1.45;
+            let body = p.y >= 2.05 && p.y < 3.7 && dx.abs() < 0.48 + (p.y - 2.05) * 0.06;
+            if arm || body {
+                // Straw at the cuffs and the hem.
+                if (arm && dx.abs() > 1.3) || (body && !arm && p.y > 3.55) {
+                    return if (p.px + p.py / 2) % 2 == 0 {
+                        YELLOW
+                    } else {
+                        GRAVEL
+                    };
+                }
+                let plaid = p.s >= 6.0 && (((p.x * 4.0) as i32 + (p.y * 4.0) as i32) % 3 == 0);
+                let l = -dx * 0.8 - (p.y - 2.3) * 0.3;
+                return if plaid {
+                    INK
+                } else {
+                    p.tone(l, [RED, RED, RED_DK])
+                };
+            }
+            // The pole.
+            if p.y >= 3.7 && dx.abs() < 0.12 {
+                return if dx > 0.02 { INK } else { BROWN };
+            }
+            C
+        },
+        10,
+        ink_edge,
+    )
+}
+
+/// GHOST COVE's (and the pumpkin patch's odd) dead tree: a crooked trunk
+/// and bare, twisting branches, no leaves.
+pub fn dead_tree() -> Steps {
+    draw(
+        4.0,
+        7.0,
+        |p| {
+            let limbs = [
+                (2.1, 7.0, 1.9, 4.2, 0.26),
+                (1.9, 4.2, 2.3, 2.6, 0.17),
+                (2.3, 2.6, 3.4, 1.4, 0.1),
+                (2.3, 2.6, 1.9, 0.5, 0.09),
+                (1.95, 4.0, 0.7, 2.6, 0.12),
+                (0.7, 2.6, 0.35, 1.5, 0.07),
+                (0.7, 2.6, 1.2, 1.7, 0.06),
+                (2.15, 3.4, 3.0, 3.1, 0.07),
+                (3.4, 1.4, 3.75, 1.7, 0.05),
+                (1.9, 0.5, 1.5, 0.2, 0.05),
+            ];
+            for (k, l) in limbs.into_iter().enumerate() {
+                if k >= 7 && p.s < 4.0 {
+                    break;
+                }
+                if let Some(light) = capsule(p, l) {
+                    return p.tone(light, [BROWN, BROWN, INK]);
+                }
+            }
+            C
+        },
+        10,
+        ink_edge,
+    )
+}
+
+/// HAUNTED PINES' dead pine: a black trunk with drooping, broken tiers
+/// of bare branches, a little snow left on two of them.
+pub fn dead_pine() -> Steps {
+    draw(
+        3.4,
+        8.0,
+        |p| {
+            let dx = p.x - 1.7;
+            if dx.abs() < 0.14 + p.y * 0.012 && p.y > 0.2 {
+                return if dx > 0.04 { INK } else { HILLS };
+            }
+            // Tiers: (height, reach left, reach right), drooping.
+            let tiers = [
+                (1.4, 0.5, 0.7),
+                (2.6, 1.1, 0.4),
+                (3.9, 0.7, 1.3),
+                (5.1, 1.5, 1.1),
+                (6.1, 0.4, 1.6),
+            ];
+            for (k, (y, left, right)) in tiers.into_iter().enumerate() {
+                let reach = if dx < 0.0 { left } else { right };
+                let droop = y + dx.abs() * 0.45;
+                let thick = (0.5 / p.s).max(0.09);
+                if dx.abs() <= reach && (p.y - droop).abs() < thick {
+                    let tip = dx.abs() > reach - 0.35;
+                    return if tip && k % 2 == 1 && p.s >= 2.6 {
+                        ICE
+                    } else {
+                        HILLS
+                    };
+                }
+            }
+            C
+        },
+        10,
+        |c| if c == ICE { ICE } else { INK },
+    )
+}
+
+/// BLOOD MOON MESA's withered saguaro: the cactus gone brown and black,
+/// a crow on its arm.
+pub fn withered_cactus() -> Steps {
+    draw(
+        2.4,
+        5.0,
+        |p| {
+            // The crow, perched on the left arm.
+            if p.s >= 4.0 {
+                let crow = p.ball(0.45, 1.38, 0.17).is_some()
+                    || p.ball(0.6, 1.2, 0.1).is_some()
+                    || (p.y > 1.3 && p.y < 1.45 && p.x > 0.15 && p.x < 0.3);
+                if crow {
+                    return if p.x > 0.66 && p.y < 1.25 {
+                        YELLOW
+                    } else {
+                        INK
+                    };
+                }
+            }
+            let parts = [
+                (1.2, 0.5, 1.25, 5.0, 0.3),
+                (0.45, 1.6, 0.42, 2.9, 0.18),
+                (0.42, 2.9, 1.0, 2.95, 0.18),
+                (1.95, 1.4, 2.0, 2.3, 0.18),
+                (1.4, 2.3, 2.0, 2.3, 0.18),
+            ];
+            for part in parts {
+                if let Some(l) = capsule(p, part) {
+                    return p.tone(l, [BROWN, BROWN, INK]);
+                }
+            }
+            C
+        },
+        6,
+        ink_edge,
+    )
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -547,6 +883,14 @@ mod tests {
             ("pine", pine()),
             ("cactus", cactus()),
             ("lamp", lamp()),
+            ("green lamp", green_lamp()),
+            ("lantern post", lantern_post()),
+            ("pumpkins", pumpkins()),
+            ("gravestone", gravestone()),
+            ("scarecrow", scarecrow()),
+            ("dead tree", dead_tree()),
+            ("dead pine", dead_pine()),
+            ("withered cactus", withered_cactus()),
         ] {
             for s in &k.sprites {
                 assert!(s.px.iter().any(|&c| c != C), "{name} {}x{}", s.w, s.h);

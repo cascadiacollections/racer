@@ -16,6 +16,7 @@ use crate::layout::{Layout, Rect};
 use crate::palette::*;
 use crate::raster::Canvas;
 use crate::render::{self, plate, secs, Held, RaceScene};
+use crate::season::Season;
 use crate::sprites::Art;
 use crate::touch::{Action, Button};
 
@@ -78,13 +79,18 @@ fn title(g: &Game, c: &mut Canvas, art: &Art, l: &Layout) -> Vec<Button> {
         ghost: None,
         ghost_note: None,
         biome: g.title_biome(),
+        season: g.season(),
+        anim: g.anim(),
     };
     render::road(c, l, art, &g.title_decor[scene.biome as usize], &scene);
     let cx = l.w / 2;
+    if scene.season == Season::Halloween {
+        halloween_banner(c, art, cx, g.anim());
+    }
     banner(c, cx, 30, "RACER", YELLOW, 5);
     banner(c, cx, 62, "EVERY ROAD PROVEN", WHITE, 1);
-    // Which of the five looks is rolling by.
-    banner(c, cx, 74, scene.biome.name(), ICE, 1);
+    // Which of the five looks is rolling by (a twin's, in a season).
+    banner(c, cx, 74, scene.look().name(), ICE, 1);
     let h = l.hud;
     c.rect(h.x, h.y, h.w, h.h, INK);
     c.text_centred(cx, h.y + 3, "ARROWS STEER  DOWN BRAKE", ASPHALT_LT, 1);
@@ -143,12 +149,41 @@ fn title(g: &Game, c: &mut Canvas, art: &Art, l: &Layout) -> Vec<Button> {
     out
 }
 
+/// The title's Halloween treatment (DESIGN §5.2): HAPPY HALLOWEEN over
+/// the RACER banner between two jack-o'-lanterns, their faces flickering
+/// by the presentation clock.
+fn halloween_banner(c: &mut Canvas, art: &Art, cx: i32, anim: u32) {
+    let text = "HAPPY HALLOWEEN";
+    let w = crate::font::small_width(text) as i32;
+    let y = 18;
+    c.rect(cx - w / 2 - 3, y - 2, w + 6, 9, INK);
+    c.text_centred(cx, y, text, YELLOW, 1);
+    // A pumpkin either side: the pile's big lantern, the far side mirrored.
+    let p = &art.pumpkins.sprites[6];
+    let flicker = (anim / 5) % 7 == 3;
+    for (x, flip) in [(cx - w / 2 - 5 - p.w, false), (cx + w / 2 + 5, true)] {
+        c.blit(p, x, y + 9 - p.h, i32::MAX, flip);
+        if flicker {
+            // A gust: the faces go dark for a frame.
+            for yy in y + 9 - p.h..y + 9 {
+                for xx in x..x + p.w {
+                    if c.get(xx, yy) == c.palette()[YELLOW as usize] {
+                        c.put(xx, yy, RED_DK);
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn racing(g: &Game, c: &mut Canvas, art: &Art, l: &Layout) -> Vec<Button> {
     let Some(run) = &g.run else {
         return Vec::new();
     };
     let mut scene = RaceScene::of(run.race(), run.index(), run.tracks(), g.bg.round() as i32);
     scene.biome = g.biome;
+    scene.season = g.season();
+    scene.anim = g.anim();
     scene.ghost = g.ghost().map(|gh| (gh.car().z, gh.car().x));
     scene.ghost_note = g.ghost_note();
     let held = if g.paused { Held::default() } else { g.held };
@@ -353,7 +388,8 @@ fn fork(g: &mut Game, c: &mut Canvas, l: &Layout) -> Vec<Button> {
                 ];
                 // The road's scenery first (DESIGN §5.1), then its numbers.
                 let y0 = pr.y + pr.h + 6;
-                c.text(r.x + 5, y0, Biome::of_track(index + 1).name(), ICE, 1);
+                let look = g.look(Biome::of_track(index + 1));
+                c.text(r.x + 5, y0, look.name(), ICE, 1);
                 for (k, line) in lines.iter().enumerate() {
                     c.text(r.x + 5, y0 + (k as i32 + 1) * 9, line, WHITE, 1);
                 }
@@ -550,8 +586,38 @@ mod tests {
         (c, b, fx)
     }
 
-    /// 2026-10-19, UTC.
+    /// 2026-10-19, UTC: the first day of the Halloween season.
     const DAY: u64 = 20_745;
+
+    #[test]
+    fn the_season_follows_the_day_and_the_flag_and_names_the_twins() {
+        let mut g = game();
+        step(&mut g, vec![]);
+        assert_eq!(g.season(), Season::None, "no day yet: the normal art");
+        step_on(&mut g, vec![], DAY);
+        assert_eq!(g.season(), Season::Halloween);
+        assert_eq!(g.look(Biome::Coast).name(), "GHOST COVE");
+        assert_eq!(g.look(Biome::Night).name(), "MONSTER CITY");
+        // Two weeks on, it is over.
+        step_on(&mut g, vec![], DAY + 14);
+        assert_eq!(g.season(), Season::None);
+        assert_eq!(g.look(Biome::Coast).name(), "COAST");
+        // The flag wins either way.
+        g.forced_season = Some(Season::Halloween);
+        assert_eq!(g.season(), Season::Halloween);
+        step_on(&mut g, vec![], DAY);
+        g.forced_season = Some(Season::None);
+        assert_eq!(g.season(), Season::None);
+        // A title frame in the season differs from one forced off, and
+        // both are palette-only.
+        let mut on = game();
+        let (a, _, _) = step_on(&mut on, vec![], DAY);
+        let mut off = game();
+        off.forced_season = Some(Season::None);
+        let (b, _, _) = step_on(&mut off, vec![], DAY);
+        assert!(a.palette_only() && b.palette_only());
+        assert_ne!(a.digest(), b.digest());
+    }
 
     #[test]
     fn daily_races_todays_seed_and_keeps_its_record_and_run_file() {
@@ -640,7 +706,17 @@ mod tests {
             },
         );
         d.load_daily(&rec.encode());
+        // DAY is in the Halloween season: this golden pins it off (the
+        // flag's way) so it shows the daily alone.
+        d.forced_season = Some(Season::None);
         out.push(("title_daily", step_on(&mut d, vec![], DAY).0));
+        // The same day as the node would pass it, nothing forced: the
+        // season comes from the date (DESIGN §5.2), so the title has its
+        // Halloween treatment and the rolling road is PUMPKIN PATCH.
+        let mut h = game();
+        let (c, _, _) = step_on(&mut h, vec![], DAY);
+        assert_eq!(h.season(), Season::Halloween);
+        out.push(("title_halloween", c));
         step(&mut g, vec![Event::Key(Key::Enter)]);
         let (c, b) = step(&mut g, vec![]);
         assert_eq!(g.mode, Mode::Racing);

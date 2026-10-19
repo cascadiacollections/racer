@@ -55,6 +55,7 @@ pub mod raster;
 pub mod render;
 pub mod scenery;
 pub mod screens;
+pub mod season;
 pub mod sprites;
 pub mod touch;
 pub mod track_store;

@@ -16,6 +16,10 @@ pub struct DevArgs {
     /// (a layout file or a bare code; `res://` and `user://` work) is read
     /// if it exists, otherwise the text is the code.
     pub layout: Option<String>,
+    /// `--racer-season halloween|none`: force a season on or off whatever
+    /// the date (DESIGN §5.2), for testing and screenshots. An unknown
+    /// value is ignored.
+    pub season: Option<crate::season::Season>,
 }
 
 impl DevArgs {
@@ -23,6 +27,9 @@ impl DevArgs {
     pub fn parse(args: &[String]) -> DevArgs {
         DevArgs {
             layout: value(args, "--racer-layout"),
+            season: value(args, "--racer-season")
+                .as_deref()
+                .and_then(crate::season::Season::parse),
         }
     }
 }
@@ -62,5 +69,18 @@ mod tests {
         assert_eq!(p("--racer-layoutX y"), None);
         assert_eq!(p(""), None);
         assert_eq!(p("--racer-layout A --racer-layout B"), Some("A".into()));
+    }
+
+    #[test]
+    fn the_season_flag_forces_a_season_on_or_off() {
+        use crate::season::Season;
+        let p = |s| DevArgs::parse(&args(s)).season;
+        assert_eq!(p("-- --racer-season halloween"), Some(Season::Halloween));
+        assert_eq!(p("--racer-season=none"), Some(Season::None));
+        assert_eq!(p("--racer-season spring"), None);
+        assert_eq!(p("--racer-layout RL04"), None);
+        let both = DevArgs::parse(&args("--racer-layout RL04 --racer-season=halloween"));
+        assert_eq!(both.layout, Some("RL04".into()));
+        assert_eq!(both.season, Some(Season::Halloween));
     }
 }
