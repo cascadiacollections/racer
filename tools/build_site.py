@@ -11,8 +11,9 @@ palette colour fails the build rather than being quietly re-quantised.
     python3 tools/build_site.py       # needs Rust; writes into site/
 
 Standard library only (zlib, struct): no Pillow, no ImageMagick. The output
-is a pure function of the renderer, so a rebuild with no renderer change
-writes the same bytes.
+is a pure function of the renderer: a rebuild with no renderer change writes
+the same pixels. (The compressed bytes can differ between zlib builds, e.g.
+Fedora's zlib-ng and Ubuntu's zlib; the pixels do not.)
 
 Outputs:
     site/assets/frames/<scene>.png    each golden frame, 2x
@@ -131,7 +132,7 @@ class Img:
 
     def png(self, path):
         """Write an indexed (colour type 3) PNG. Every row uses filter 0 and
-        zlib level 9, so equal images give equal bytes."""
+        zlib level 9, so one zlib gives equal bytes for equal images."""
 
         def chunk(tag, body):
             return (
