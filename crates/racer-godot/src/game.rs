@@ -32,12 +32,13 @@ use godot::prelude::*;
 
 use crate::app::{Effect, Game};
 use crate::audio::{Loops, Sfx, DRIFT_FILE, ENGINE_FILE, MUSIC_FILE};
-use crate::builder::Worker;
+use crate::builder::{generate, worker_count, Worker};
 use crate::frame::{frame_cap, tighter_cap, Redraw};
 use crate::input::{self, Event, Intents};
 use crate::raster::Canvas;
 use crate::screens;
 use crate::sprites::Art;
+use crate::track_store::TrackStore;
 
 const KEYS: [(input::Key, Key); 13] = [
     (input::Key::Left, Key::LEFT),
@@ -149,7 +150,10 @@ impl INode2D for Racer {
     fn init(base: Base<Node2D>) -> Self {
         Racer {
             base,
-            g: Game::new(Box::new(Worker::spawn())),
+            g: Game::new(Box::new(Worker::with(
+                worker_count(),
+                TrackStore::new(tracks_dir()).source(generate()),
+            ))),
             art: Art::new(),
             canvas: Canvas::new(crate::layout::W, crate::layout::H_MIN),
             events: Vec::new(),
@@ -313,6 +317,16 @@ fn typed(code: Key) -> Option<u8> {
     } else {
         None
     }
+}
+
+/// `user://tracks` as a filesystem path: the built tracks kept between
+/// launches (`track_store`), app-private, read and written by the builder
+/// threads (which never call the engine: the path is resolved here).
+fn tracks_dir() -> std::path::PathBuf {
+    ProjectSettings::singleton()
+        .globalize_path("user://tracks")
+        .to_string()
+        .into()
 }
 
 /// `user://layouts/<name>` as a filesystem path: the slots file and the

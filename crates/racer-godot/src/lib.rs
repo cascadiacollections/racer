@@ -16,7 +16,8 @@
 //! core       app            modes, the run, pause, DEMO (engine-free)
 //!            audio          which sounds play, from the sim's state
 //!            input, touch   bindings and quantisation; on-screen buttons
-//!            builder        tracks built on a worker thread
+//!            builder        tracks built on two worker threads
+//!            track_store    built tracks kept on disk (user://tracks)
 //! drawing    project        the pseudo-3D road projection, pinned in metres
 //!            render         a race painted: road, sprites, car, HUD, pad
 //!            screens        title, fork cards, results, pause; their buttons
@@ -54,6 +55,7 @@ pub mod scenery;
 pub mod screens;
 pub mod sprites;
 pub mod touch;
+pub mod track_store;
 
 struct RacerExtension;
 
