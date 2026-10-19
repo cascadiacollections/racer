@@ -8,6 +8,8 @@
 //!   process(delta)
 //!     ├─ gather   queued events + keys/pads held + stick ──► Intents
 //!     ├─ Game::tick(delta, Intents) ──► effects applied in order
+//!     │    (sounds: one AudioStreamPlayer per one-shot, the engine and
+//!     │    tyre loops, the title music; all from art/audio, see audio.rs)
 //!     ├─ frame cap: menus idle at frame::IDLE_FPS
 //!     └─ Redraw::due(busy)? ──► screens::frame ──► Canvas ──► one ImageTexture
 //!   draw(): the texture at the origin, 1:1; the viewport's canvas_items/keep
@@ -20,13 +22,15 @@
 use godot::classes::image::Format;
 use godot::classes::notify::CanvasItemNotification;
 use godot::classes::{
-    DisplayServer, Engine, INode2D, Image, ImageTexture, Input, InputEvent, InputEventJoypadButton,
-    InputEventKey, InputEventScreenDrag, InputEventScreenTouch, Node2D, Os, ProjectSettings, Time,
+    AudioStream, AudioStreamPlayer, DisplayServer, Engine, INode2D, Image, ImageTexture, Input,
+    InputEvent, InputEventJoypadButton, InputEventKey, InputEventScreenDrag, InputEventScreenTouch,
+    Node2D, Os, ProjectSettings, ResourceLoader, Time,
 };
 use godot::global::{JoyAxis, JoyButton, Key};
 use godot::prelude::*;
 
 use crate::app::{Effect, Game};
+use crate::audio::{Loops, Sfx, DRIFT_FILE, ENGINE_FILE, MUSIC_FILE};
 use crate::builder::Worker;
 use crate::frame::{frame_cap, tighter_cap, Redraw};
 use crate::input::{self, Event, Intents};
@@ -68,6 +72,46 @@ const PADS: [(input::Pad, JoyButton); 12] = [
 /// A trigger past this reads as pressed.
 const TRIGGER_PULL: f32 = 0.5;
 
+/// The title music sits under the effects.
+const MUSIC_DB: f32 = -7.0;
+
+/// The players: one per one-shot (in `Sfx::ALL` order), the two loops and
+/// the music. `None` where the file failed to load: that sound is silent.
+#[derive(Default)]
+struct Players {
+    sfx: Vec<Option<Gd<AudioStreamPlayer>>>,
+    engine: Option<Gd<AudioStreamPlayer>>,
+    drift: Option<Gd<AudioStreamPlayer>>,
+    music: Option<Gd<AudioStreamPlayer>>,
+}
+
+/// A linear volume in thousandths, in decibels.
+fn thousandths_db(v: u16) -> f32 {
+    if v == 0 {
+        -80.0
+    } else {
+        (20.0 * (f32::from(v) / 1000.0).log10()).max(-80.0)
+    }
+}
+
+/// Start, retune or stop a loop: silent is stopped.
+fn set_loop(player: &mut Option<Gd<AudioStreamPlayer>>, volume: u16, pitch: Option<u16>) {
+    let Some(p) = player else { return };
+    if volume == 0 {
+        if p.is_playing() {
+            p.stop();
+        }
+        return;
+    }
+    p.set_volume_db(thousandths_db(volume));
+    if let Some(pitch) = pitch {
+        p.set_pitch_scale((f32::from(pitch) / 1000.0).max(0.05));
+    }
+    if !p.is_playing() {
+        p.play();
+    }
+}
+
 /// The game node.
 #[derive(GodotClass)]
 #[class(base = Node2D)]
@@ -94,6 +138,7 @@ pub struct Racer {
     /// elsewhere. Set by `godot/platform_services.gd`.
     runs_dir: String,
     cap: i32,
+    audio: Players,
     #[cfg(feature = "profiling")]
     profile: crate::profiling::Profile,
 }
@@ -117,6 +162,7 @@ impl INode2D for Racer {
             platform_cap: 0,
             runs_dir: String::new(),
             cap: -1,
+            audio: Players::default(),
             #[cfg(feature = "profiling")]
             profile: crate::profiling::Profile::default(),
         }
@@ -124,6 +170,7 @@ impl INode2D for Racer {
 
     fn ready(&mut self) {
         self.project_cap = Engine::singleton().get_max_fps();
+        self.setup_audio();
         godot_print!(
             "racer: sim epoch {} ({:#018x})",
             racer_sim::SIM_EPOCH,
@@ -286,6 +333,38 @@ impl Racer {
 }
 
 impl Racer {
+    /// A player for `res://art/audio/<file>.wav`, a child of the node, at
+    /// `db`. Imported loops loop by themselves: the generator writes their
+    /// loop points into the file (tools/gen_audio.py).
+    fn player(&mut self, file: &str, db: f32) -> Option<Gd<AudioStreamPlayer>> {
+        let path = format!("res://art/audio/{file}.wav");
+        let Some(stream) = ResourceLoader::singleton()
+            .load(&path)
+            .and_then(|r| r.try_cast::<AudioStream>().ok())
+        else {
+            godot_warn!("racer: could not load sound {path}");
+            return None;
+        };
+        let mut p = AudioStreamPlayer::new_alloc();
+        p.set_stream(&stream);
+        p.set_volume_db(db);
+        self.base_mut().add_child(&p);
+        Some(p)
+    }
+
+    fn setup_audio(&mut self) {
+        let sfx = Sfx::ALL
+            .iter()
+            .map(|s| self.player(s.file(), 0.0))
+            .collect();
+        self.audio = Players {
+            sfx,
+            engine: self.player(ENGINE_FILE, -80.0),
+            drift: self.player(DRIFT_FILE, -80.0),
+            music: self.player(MUSIC_FILE, MUSIC_DB),
+        };
+    }
+
     /// Write a run file. A failure is logged, never fatal: playtest data is
     /// a nicety, the game goes on.
     fn save_run(&self, name: &str, text: &str) {
@@ -380,6 +459,33 @@ impl Racer {
                 Effect::KeepScreenOn(on) => DisplayServer::singleton().screen_set_keep_on(on),
                 Effect::Quit => self.base().get_tree().quit(),
                 Effect::SaveRun { name, text } => self.save_run(&name, &text),
+                Effect::Sound(sfx) => {
+                    if let Some(p) = self
+                        .audio
+                        .sfx
+                        .get_mut(sfx as usize)
+                        .and_then(Option::as_mut)
+                    {
+                        p.play();
+                    }
+                }
+                Effect::Loops(Loops {
+                    engine_pitch,
+                    engine_volume,
+                    drift_volume,
+                }) => {
+                    set_loop(&mut self.audio.engine, engine_volume, Some(engine_pitch));
+                    set_loop(&mut self.audio.drift, drift_volume, None);
+                }
+                Effect::Music(on) => {
+                    if let Some(p) = &mut self.audio.music {
+                        if on && !p.is_playing() {
+                            p.play();
+                        } else if !on {
+                            p.stop();
+                        }
+                    }
+                }
             }
         }
     }

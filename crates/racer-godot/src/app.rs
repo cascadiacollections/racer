@@ -27,6 +27,10 @@
 //!
 //! Racing pauses on focus loss and on the back gesture; DEMO lets the sim's
 //! human-like bot drive and pick forks, and any input ends it.
+//!
+//! Sound is decided here too (`audio`): one-shots from what changed between
+//! sim ticks, the engine and tyre loops from the car each frame, the title
+//! music from the mode. DEMO asks for none of it.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -41,6 +45,7 @@ use racer_sim::run::{RunPhase, RunState, TrackCache};
 use racer_sim::track::{fixtures, Track};
 use racer_sim::DT;
 
+use crate::audio::{loop_targets, Loops, Mixer, Sfx, Watch};
 use crate::builder::{Build, Key};
 use crate::input::{bind, pressed, Controls, Event, Intents, SteerRamp};
 use crate::layout::{buffer_size, inset_rows, Layout, H_MIN};
@@ -88,6 +93,12 @@ pub enum Effect {
     /// write `text` (racer_sim::replay::encode_run) as file `name` in the
     /// runs directory. Never for DEMO.
     SaveRun { name: String, text: String },
+    /// Play a one-shot sound once.
+    Sound(Sfx),
+    /// Set the engine and tyre loops: start, stop or retune them.
+    Loops(Loops),
+    /// Start or stop the title music.
+    Music(bool),
 }
 
 /// The DEMO driver.
@@ -136,6 +147,13 @@ pub struct Game {
     /// The bottom inset the layout was made for, screen pixels.
     inset_px: i32,
     fx: Vec<Effect>,
+    /// One-shots asked for this frame, deduplicated when sent.
+    sfx: Vec<Sfx>,
+    /// Watches the race on screen for one-shots.
+    watch: Option<Watch>,
+    mixer: Mixer,
+    /// Whether the title music was last asked to play.
+    music: bool,
 }
 
 impl Game {
@@ -167,6 +185,10 @@ impl Game {
             window: (0, 0),
             inset_px: 0,
             fx: Vec::new(),
+            sfx: Vec::new(),
+            watch: None,
+            mixer: Mixer::default(),
+            music: false,
         }
     }
 
@@ -216,6 +238,48 @@ impl Game {
     /// One frame. `delta` is the frame's length in seconds.
     pub fn tick(&mut self, delta: f64, i: &Intents) -> Vec<Effect> {
         let delta = delta.clamp(0.0, MAX_FRAME);
+        self.step(delta, i);
+        self.sound(delta);
+        std::mem::take(&mut self.fx)
+    }
+
+    /// Whether the game is silent: DEMO.
+    pub fn quiet(&self) -> bool {
+        self.demo.is_some()
+    }
+
+    /// The frame's sound effects: its one-shots, the loops and the music.
+    fn sound(&mut self, delta: f64) {
+        let quiet = self.quiet();
+        let mut sfx = std::mem::take(&mut self.sfx);
+        if quiet {
+            sfx.clear();
+        }
+        let mut seen = Vec::with_capacity(sfx.len());
+        for s in sfx.drain(..) {
+            if !seen.contains(&s) {
+                seen.push(s);
+                self.fx.push(Effect::Sound(s));
+            }
+        }
+        self.sfx = sfx;
+        let target = match (&self.run, self.mode, self.paused, quiet) {
+            (Some(run), Mode::Racing, false, false) if run.phase() == RunPhase::Racing => {
+                Some(loop_targets(run.race().car()))
+            }
+            _ => None,
+        };
+        if let Some(l) = self.mixer.update(delta, target) {
+            self.fx.push(Effect::Loops(l));
+        }
+        let music = !quiet && matches!(self.mode, Mode::Title | Mode::Building);
+        if music != self.music {
+            self.music = music;
+            self.fx.push(Effect::Music(music));
+        }
+    }
+
+    fn step(&mut self, delta: f64, i: &Intents) {
         self.clock += delta;
         if (i.window != self.window || i.bottom_inset != self.inset_px) && i.window.0 > 0 {
             self.window = i.window;
@@ -259,7 +323,7 @@ impl Game {
                 .any(|e| matches!(e, Event::Key(_) | Event::Pad(_) | Event::FingerDown { .. }));
             if woke || back {
                 self.go_to_title();
-                return std::mem::take(&mut self.fx);
+                return;
             }
         }
         if back {
@@ -268,6 +332,7 @@ impl Game {
         match self.mode {
             Mode::Title => {
                 if confirm || self.touch.pressed(Action::Start) {
+                    self.sfx.push(Sfx::Click);
                     self.start(i.entropy, false);
                 } else if self.touch.pressed(Action::Demo) {
                     self.start(i.entropy, true);
@@ -285,11 +350,11 @@ impl Game {
             Mode::Fork => self.forking(delta, i, confirm),
             Mode::Results => {
                 if confirm || self.touch.pressed(Action::Continue) {
+                    self.sfx.push(Sfx::Click);
                     self.go_to_title();
                 }
             }
         }
-        std::mem::take(&mut self.fx)
     }
 
     /// The window lost focus or the app was sent to the background: let go
@@ -299,6 +364,9 @@ impl Game {
         if self.mode == Mode::Racing && !self.paused && self.demo.is_none() {
             self.paused = true;
             self.fx.push(Effect::KeepScreenOn(false));
+        }
+        if let Some(l) = self.mixer.silence() {
+            self.fx.push(Effect::Loops(l));
         }
         self.fx.push(Effect::Redraw);
         std::mem::take(&mut self.fx)
@@ -314,6 +382,7 @@ impl Game {
 
     fn set_paused(&mut self, paused: bool) {
         self.paused = paused;
+        self.sfx.push(Sfx::Click);
         self.touch.release_all();
         self.fx.push(Effect::KeepScreenOn(!paused));
         self.fx.push(Effect::Redraw);
@@ -340,6 +409,7 @@ impl Game {
         self.paused = false;
         self.demo = None;
         self.run = None;
+        self.watch = None;
         self.touch.release_all();
         self.held = Held::default();
         self.fx.push(Effect::KeepScreenOn(false));
@@ -362,6 +432,7 @@ impl Game {
         let Some(run) = &self.run else { return };
         let index = run.index();
         let track = run.race().track().clone();
+        self.watch = Some(Watch::new(run.race()));
         self.decor = Decor::new(&track);
         if index + 1 < TRACKS {
             for b in 0..2 {
@@ -403,6 +474,7 @@ impl Game {
             if confirm || self.touch.pressed(Action::Resume) {
                 self.set_paused(false);
             } else if self.touch.pressed(Action::Quit) {
+                self.sfx.push(Sfx::Click);
                 self.save_run(Ending::Quit);
                 self.go_to_title();
             }
@@ -420,6 +492,9 @@ impl Game {
                 None => self.ramp.shape(player, controls.left != controls.right),
             };
             run.step(input);
+            if let Some(w) = &mut self.watch {
+                w.step(run.race(), &mut self.sfx);
+            }
             last = input;
             let car = run.race().car();
             let k = run.race().track().segment_at(car.z).curvature();
@@ -452,6 +527,13 @@ impl Game {
                 } else {
                     Ending::Lost
                 };
+                // The fanfare or the sting stands in for the last chime.
+                self.sfx.retain(|s| *s != Sfx::Chime);
+                self.sfx.push(if ending == Ending::Won {
+                    Sfx::Win
+                } else {
+                    Sfx::TimeUp
+                });
                 self.mode = Mode::Results;
                 self.touch.release_all();
                 self.fx.push(Effect::KeepScreenOn(false));
@@ -463,11 +545,15 @@ impl Game {
     fn forking(&mut self, delta: f64, i: &Intents, confirm: bool) {
         let any = |keys| i.events.iter().any(|e| pressed(e, keys, &[]));
         let pad_any = |pads| i.events.iter().any(|e| pressed(e, &[], pads));
+        let sel = self.fork_sel;
         if any(bind::MENU_LEFT) || pad_any(bind::PAD_LEFT) {
             self.fork_sel = 0;
         }
         if any(bind::MENU_RIGHT) || pad_any(bind::PAD_RIGHT) {
             self.fork_sel = 1;
+        }
+        if self.fork_sel != sel {
+            self.sfx.push(Sfx::Click);
         }
         if !self.fork_ready() {
             return;
@@ -485,6 +571,7 @@ impl Game {
             None
         };
         if let Some(b) = pick {
+            self.sfx.push(Sfx::Click);
             if let Some(run) = &mut self.run {
                 run.fork(b, &mut self.cache);
                 self.begin_race();
@@ -519,6 +606,37 @@ mod tests {
             t.set_allotments(vec![racer_sim::ticks(allot); n]);
             t
         })))
+    }
+
+    /// A builder that hands out two gates' worth of straight road.
+    fn two_gates() -> Game {
+        Game::new(Box::new(Inline::new(|_| {
+            let mut b = racer_sim::track::Builder::new();
+            b.straight(60)
+                .checkpoint()
+                .straight(60)
+                .checkpoint()
+                .straight(20);
+            let mut t = b.build();
+            t.set_allotments(vec![racer_sim::ticks(30.0); 2]);
+            t
+        })))
+    }
+
+    fn sounds(fx: &[Effect]) -> Vec<Sfx> {
+        fx.iter()
+            .filter_map(|e| match e {
+                Effect::Sound(s) => Some(*s),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn loops(fx: &[Effect]) -> Option<Loops> {
+        fx.iter().rev().find_map(|e| match e {
+            Effect::Loops(l) => Some(*l),
+            _ => None,
+        })
     }
 
     fn frame(g: &mut Game, events: Vec<Event>, keys: Vec<K>) -> Vec<Effect> {
@@ -672,5 +790,126 @@ mod tests {
         frame(&mut g, vec![Event::Key(K::Left)], vec![]);
         assert_eq!(g.mode, Mode::Title);
         assert!(!g.demo());
+    }
+
+    #[test]
+    fn each_gate_chimes_exactly_once() {
+        let mut g = two_gates();
+        start(&mut g);
+        let mut heard = Vec::new();
+        let mut n = 0;
+        while g.mode == Mode::Racing && n < 60 * 60 {
+            let fx = frame(&mut g, vec![], vec![]);
+            let s = sounds(&fx);
+            assert!(s.iter().filter(|s| **s == Sfx::Chime).count() <= 1);
+            heard.extend(s);
+            n += 1;
+        }
+        assert_eq!(g.mode, Mode::Fork);
+        assert_eq!(
+            heard,
+            vec![Sfx::Chime, Sfx::Chime],
+            "one per gate, nothing else"
+        );
+        let fx = frame(&mut g, vec![Event::Key(K::Enter)], vec![]);
+        assert_eq!(sounds(&fx), vec![Sfx::Click], "a fork pick clicks");
+    }
+
+    #[test]
+    fn the_title_has_music_and_racing_has_the_engine_instead() {
+        let mut g = game(30.0);
+        let fx = frame(&mut g, vec![], vec![]);
+        assert!(fx.contains(&Effect::Music(true)));
+        let fx = frame(&mut g, vec![Event::Key(K::Enter)], vec![]);
+        assert_eq!(sounds(&fx), vec![Sfx::Click]);
+        let mut fx = frame(&mut g, vec![], vec![]);
+        fx.extend(frame(&mut g, vec![], vec![]));
+        assert_eq!(g.mode, Mode::Racing);
+        assert!(fx.contains(&Effect::Music(false)));
+        let started = loops(&fx).expect("the engine starts with the race");
+        assert!(started.engine_volume > 0 && started.drift_volume == 0);
+        let mut last = started;
+        for _ in 0..120 {
+            if let Some(l) = loops(&frame(&mut g, vec![], vec![])) {
+                last = l;
+            }
+        }
+        assert!(last.engine_pitch > started.engine_pitch, "it revs up");
+        assert!(last.engine_volume > started.engine_volume);
+    }
+
+    #[test]
+    fn pausing_fades_the_loops_out_and_resuming_brings_them_back() {
+        let mut g = game(30.0);
+        start(&mut g);
+        for _ in 0..30 {
+            frame(&mut g, vec![], vec![]);
+        }
+        let fx = frame(&mut g, vec![Event::Key(K::Escape)], vec![]);
+        assert!(g.paused);
+        assert_eq!(sounds(&fx), vec![Sfx::Click]);
+        let mut last = None;
+        for _ in 0..15 {
+            if let Some(l) = loops(&frame(&mut g, vec![], vec![])) {
+                last = Some(l);
+            }
+        }
+        assert!(last.unwrap().silent(), "faded out within a quarter second");
+        assert!((0..60).all(|_| loops(&frame(&mut g, vec![], vec![])).is_none()));
+        frame(&mut g, vec![Event::Key(K::Enter)], vec![]);
+        let back = (0..10).find_map(|_| loops(&frame(&mut g, vec![], vec![])));
+        assert!(back.unwrap().engine_volume > 0);
+        // Losing focus silences at once.
+        let fx = g.focus_lost();
+        assert!(loops(&fx).unwrap().silent());
+    }
+
+    #[test]
+    fn running_out_of_time_ticks_then_stings_and_the_title_music_returns() {
+        let mut g = game(3.0);
+        start(&mut g);
+        let mut heard = Vec::new();
+        let mut music = Vec::new();
+        for _ in 0..300 {
+            let fx = frame(&mut g, vec![], vec![]);
+            heard.extend(sounds(&fx));
+            music.extend(fx.iter().filter(|e| matches!(e, Effect::Music(_))).cloned());
+        }
+        assert_eq!(g.mode, Mode::Results);
+        assert_eq!(heard, vec![Sfx::Tick, Sfx::Tick, Sfx::TimeUp]);
+        assert!(music.is_empty(), "no music on the results screen");
+        assert!(g.mixer.sent().silent(), "the engine stopped");
+        let fx = frame(&mut g, vec![Event::Key(K::Space)], vec![]);
+        assert_eq!(sounds(&fx), vec![Sfx::Click]);
+        assert!(fx.contains(&Effect::Music(true)));
+    }
+
+    #[test]
+    fn the_demo_is_silent() {
+        let mut g = game(60.0);
+        frame(&mut g, vec![], vec![]);
+        g.set_buttons(vec![Button {
+            rect: crate::layout::Rect::new(0, 0, 180, 400),
+            action: Action::Demo,
+        }]);
+        let down = Event::FingerDown {
+            index: 0,
+            x: 5.0,
+            y: 5.0,
+        };
+        let mut fx = frame(&mut g, vec![down], vec![]);
+        fx.extend(frame(&mut g, vec![Event::FingerUp { index: 0 }], vec![]));
+        assert!(g.demo());
+        // Through a whole track, the fork and into the next.
+        for _ in 0..60 * 60 {
+            fx.extend(frame(&mut g, vec![], vec![]));
+        }
+        assert!(g.run.as_ref().unwrap().index() >= 1, "DEMO reached a fork");
+        assert!(sounds(&fx).is_empty(), "{:?}", sounds(&fx));
+        assert!(!fx.contains(&Effect::Music(true)));
+        assert!(fx
+            .iter()
+            .all(|e| !matches!(e, Effect::Loops(l) if !l.silent())));
+        assert!(fx.contains(&Effect::Music(false)), "the title music stops");
     }
 }
