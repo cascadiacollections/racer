@@ -15,7 +15,7 @@
 //! and the pad are drawn in the same indices everywhere.
 
 use racer_sim::biome::Biome;
-use racer_sim::car::{Car, Drift, MINI_CHARGE, SUPER_CHARGE};
+use racer_sim::car::{Car, Drift, MINI_CHARGE, SPIN_TICKS, SUPER_CHARGE};
 use racer_sim::input::Input;
 use racer_sim::race::Race;
 use racer_sim::rng::mix64;
@@ -26,7 +26,7 @@ use crate::palette::*;
 use crate::project::{half_width, Camera, Placed, RoadView, Row, STRIPE_SEGS};
 use crate::raster::{Canvas, Sprite};
 use crate::scenery;
-use crate::sprites::{Art, CarFrame, Steps, CAR_H, CAR_W};
+use crate::sprites::{Art, CarFrame, Steps, SPIN_FRAMES};
 
 /// How far ahead a drift-required corner is announced, metres.
 pub const DRIFT_WARN: f64 = 150.0;
@@ -424,6 +424,8 @@ enum Thing<'a> {
         sprite: &'a Sprite,
         at: Placed,
         flip: bool,
+        /// Rows above its spot it floats: the ghost's marker.
+        lift: i32,
     },
     Gate {
         at: Placed,
@@ -443,7 +445,12 @@ impl Thing<'_> {
 fn stand<'a>(out: &mut Vec<Thing<'a>>, steps: &'a Steps, at: Option<Placed>, flip: bool) {
     if let Some(at) = at {
         if let Some(sprite) = steps.pick(at.scale) {
-            out.push(Thing::Sprite { sprite, at, flip });
+            out.push(Thing::Sprite {
+                sprite,
+                at,
+                flip,
+                lift: 0,
+            });
         }
     }
 }
@@ -483,7 +490,7 @@ pub fn road(c: &mut Canvas, l: &Layout, art: &Art, decor: &Decor, s: &RaceScene)
     for t in s.track.traffic() {
         stand(
             &mut things,
-            &art.traffic,
+            art.traffic_for(t),
             v.place(t.z_at(s.tick), t.x()),
             false,
         );
@@ -492,7 +499,27 @@ pub fn road(c: &mut Canvas, l: &Layout, art: &Art, decor: &Decor, s: &RaceScene)
     // rest and clipped by crests like them. Behind the camera it has no
     // place; under the player's car it is drawn first and covered.
     if let Some((z, x)) = s.ghost {
-        stand(&mut things, &art.ghost, v.place(z, x), false);
+        let at = v.place(z, x);
+        stand(&mut things, &art.ghost, at, false);
+        // Far off, a marker floats over it, drawn just after it: a car a
+        // few pixels wide is easy to lose on the road. Only while some of
+        // the ghost itself shows over the road in front of it.
+        if let Some(at) = at.filter(|a| a.scale < GHOST_MARKER_SCALE) {
+            let bottom = l.road.y + l.road.h;
+            if let Some(g) = art.ghost.pick(at.scale) {
+                if at.y - g.h < at.clip.min(bottom) {
+                    things.push(Thing::Sprite {
+                        sprite: &art.fx.marker,
+                        at: Placed {
+                            dz: at.dz - 1e-3,
+                            ..at
+                        },
+                        flip: false,
+                        lift: g.h + 2,
+                    });
+                }
+            }
+        }
     }
     let gates = s.track.checkpoints();
     for (k, &g) in gates.iter().enumerate().skip(s.next_gate) {
@@ -508,9 +535,15 @@ pub fn road(c: &mut Canvas, l: &Layout, art: &Art, decor: &Decor, s: &RaceScene)
     let bottom = l.road.y + l.road.h;
     for t in &things {
         match *t {
-            Thing::Sprite { sprite, at, flip } => {
+            Thing::Sprite {
+                sprite,
+                at,
+                flip,
+                lift,
+            } => {
                 let y_max = at.clip.min(bottom);
-                c.blit(sprite, at.x - sprite.w / 2, at.y - sprite.h, y_max, flip);
+                let y = at.y - sprite.h - lift;
+                c.blit(sprite, at.x - sprite.w / 2, y, y_max, flip);
             }
             Thing::Gate { at, hw, finish } => gate(c, &at, hw, finish, bottom),
         }
@@ -519,35 +552,84 @@ pub fn road(c: &mut Canvas, l: &Layout, art: &Art, decor: &Decor, s: &RaceScene)
     v
 }
 
-/// A checkpoint gate: two posts and a banner over the road.
+/// A checkpoint gate: two posts and a banner over the road. The posts are
+/// white with a grey shadow side and red bands; the banner is yellow (the
+/// finish: chequered) inside an ink border, and once it is tall enough
+/// it names itself, CHECKPOINT or FINISH, in ink on a plate of its own.
 fn gate(c: &mut Canvas, at: &Placed, hw: f64, finish: bool, bottom: i32) {
     let s = at.scale;
     let y_max = at.clip.min(bottom);
     let reach = ((hw + 0.8) * s).round() as i32;
     let post = ((0.4 * s).round() as i32).max(1);
     let (top, band) = ((5.5 * s).round() as i32, ((1.2 * s).round() as i32).max(1));
-    for y in (at.y - top).max(0)..at.y.min(y_max) {
-        c.span(at.x - reach - post, at.x - reach, y, WHITE);
-        c.span(at.x + reach, at.x + reach + post, y, WHITE);
+    let stripe = ((0.6 * s).round() as i32).max(1);
+    let y0 = at.y - top;
+    for y in y0.max(0)..at.y.min(y_max) {
+        // Red bands up the posts, every other stripe.
+        let red = post >= 2 && ((y - y0) / stripe) % 2 == 1;
+        for (x0, x1) in [
+            (at.x - reach - post, at.x - reach),
+            (at.x + reach, at.x + reach + post),
+        ] {
+            c.span(x0, x1, y, if red { RED } else { WHITE });
+            if post >= 3 {
+                c.put(x1 - 1, y, if red { RED_DK } else { ASPHALT_LT });
+            }
+        }
     }
-    for y in (at.y - top).max(0)..(at.y - top + band).min(y_max) {
-        for x in at.x - reach - post..at.x + reach + post {
-            let cell = ((x - at.x).div_euclid(band.max(2) / 2 + 1)
-                + (y - at.y + top) / (band / 2 + 1))
-                & 1;
-            let ink = match (finish, cell == 0) {
-                (true, true) => WHITE,
-                (true, false) => INK,
-                (false, true) => YELLOW,
-                (false, false) => INK,
+    let (bx0, bx1) = (at.x - reach - post, at.x + reach + post);
+    let border = band >= 4;
+    for y in y0.max(0)..(y0 + band).min(y_max) {
+        let edge_row = border && (y == y0 || y == y0 + band - 1);
+        for x in bx0..bx1 {
+            let ink = if edge_row || (border && (x == bx0 || x == bx1 - 1)) {
+                INK
+            } else {
+                let cell =
+                    ((x - at.x).div_euclid(band.max(2) / 2 + 1) + (y - y0) / (band / 2 + 1)) & 1;
+                match (finish, cell == 0) {
+                    (true, true) => WHITE,
+                    (true, false) => INK,
+                    (false, _) => YELLOW,
+                }
             };
             c.put(x, y, ink);
         }
     }
+    // A checkpoint's banner, too short for a word, gets ink chevrons.
+    let label = if finish { "FINISH" } else { "CHECKPOINT" };
+    let tw = crate::font::small_width(label) as i32;
+    if band >= 7 && tw + 6 <= bx1 - bx0 {
+        let (plate, ink) = if finish { (WHITE, INK) } else { (YELLOW, INK) };
+        let ty = y0 + (band - 5) / 2;
+        if ty + 5 < y_max {
+            c.rect(at.x - tw / 2 - 2, ty - 1, tw + 4, 7, plate);
+            c.text(at.x - tw / 2, ty, label, ink, 1);
+        }
+    } else if !finish && band >= 5 {
+        // Arrows: ">" marks across the banner, `h` rows each way.
+        let h = (band - 2) / 2;
+        let mid = y0 + band / 2;
+        let mut x = bx0 + 2;
+        while x + h < bx1 - 2 {
+            for d in 1 - h..h {
+                if mid + d < y_max {
+                    c.put(x + h - 1 - d.abs(), mid + d, INK);
+                }
+            }
+            x += h + 3;
+        }
+    }
 }
 
-/// Which frame the car is drawn with.
-pub fn car_frame(car: &Car, input: Input, tick: u32) -> CarFrame {
+/// Pixels a metre below which the ghost gets a marker over it: past
+/// about 15 m ahead of the player's car.
+pub const GHOST_MARKER_SCALE: f64 = 3.0;
+
+/// Which pose the car is drawn in. Steering leans it one step, full lock
+/// two; a drift turns it the way it slides; a spin turns it round one and
+/// a half times, fast at first, slowing as the spin runs out.
+pub fn car_frame(car: &Car, input: Input) -> CarFrame {
     let steer = input.steer_level();
     let side = if steer != 0 {
         steer.signum() as i32
@@ -558,43 +640,72 @@ pub fn car_frame(car: &Car, input: Input, tick: u32) -> CarFrame {
     } else {
         0
     };
+    let lean = if steer.abs() >= racer_sim::input::STEER_LEVELS {
+        2
+    } else {
+        1
+    };
     match car.drift {
-        Drift::Spin(_) => [
-            CarFrame::DriftLeft,
-            CarFrame::LeanLeft,
-            CarFrame::DriftRight,
-            CarFrame::LeanRight,
-        ][(tick / 6 % 4) as usize],
+        Drift::Spin(n) => {
+            let t = 1.0 - n.min(SPIN_TICKS) as f64 / SPIN_TICKS as f64;
+            let turns = 1.5 * (1.0 - (1.0 - t) * (1.0 - t));
+            let k = (turns * SPIN_FRAMES as f64) as usize % SPIN_FRAMES;
+            // Sliding left, it spins the other way.
+            let k = if car.vx < -0.5 {
+                (SPIN_FRAMES - k) % SPIN_FRAMES
+            } else {
+                k
+            };
+            CarFrame::Spin(k as u8)
+        }
         Drift::Drifting | Drift::Entry(_) if side < 0 => CarFrame::DriftLeft,
         Drift::Drifting | Drift::Entry(_) if side > 0 => CarFrame::DriftRight,
-        _ if steer < 0 => CarFrame::LeanLeft,
-        _ if steer > 0 => CarFrame::LeanRight,
+        _ if steer < 0 => CarFrame::LeanLeft(lean),
+        _ if steer > 0 => CarFrame::LeanRight(lean),
         _ => CarFrame::Straight,
     }
 }
 
-/// The player's car, bottom-centre, on the road under it.
+/// The player's car, bottom-centre, on the road under it: its shadow and
+/// lamps are in its frames; tyre smoke while sliding and the flame while
+/// boosting are drawn over it.
 fn player(c: &mut Canvas, v: &RoadView, s: &RaceScene, art: &Art, bottom: i32) {
     let ground = v
         .place(s.car.z, s.car.x)
         .map_or(v.car_row(), |p| p.y)
         .min(bottom - 2);
-    let x = v.w / 2 - CAR_W / 2;
-    let y = ground - CAR_H + 2;
-    let frame = car_frame(&s.car, s.input, s.tick);
-    // Tyre smoke while sliding, flames while boosting: both flicker.
-    if s.car.drifting() || s.car.spinning() {
-        for i in 0..6 {
-            let dx = ((s.tick as i32 * 3 + i * 7) % 9) - 4;
-            let side = if i % 2 == 0 { -1 } else { 1 };
-            c.put(v.w / 2 + side * 13 + dx, ground - (i % 3), WHITE);
+    let frame = car_frame(&s.car, s.input);
+    // Every frame turns about the car's centre, placed so the straight
+    // frame's lowest row sits two rows under the road at the car.
+    let straight = art.car.get(CarFrame::Straight);
+    let cy = ground + 2 - (straight.body.h - straight.origin.1);
+    let f = art.car.get(frame);
+    let (x, y) = (v.w / 2 - f.origin.0, cy - f.origin.1);
+    let sprite = if s.input.brake() { &f.braking } else { &f.body };
+    c.blit(sprite, x, y, bottom, false);
+    if s.car.boost_ticks > 0 {
+        let flame = &art.fx.flame[(s.tick / 2 % 2) as usize];
+        for (px, py) in f.pipes {
+            c.blit(flame, x + px - flame.w / 2, y + py, bottom, false);
         }
     }
-    c.blit(&art.car[frame as usize], x, y, bottom, false);
-    if s.car.boost_ticks > 0 && s.tick % 4 < 2 {
-        for dx in [-8, 7] {
-            c.rect(v.w / 2 + dx, ground - 4, 2, 2, YELLOW);
-            c.put(v.w / 2 + dx, ground - 2, RED);
+    if s.car.drifting() || s.car.spinning() {
+        // Puffs leave each rear tyre in turn, grow, and drift out and back.
+        let smoke = &art.fx.smoke;
+        let life = 4 * smoke.len() as u32;
+        for i in 0..4u32 {
+            let age = (s.tick + i * life / 4) % life;
+            let puff = &smoke[(age / 4) as usize];
+            let side = (i % 2) as usize;
+            let (tx, ty) = f.tyres[side];
+            let out = if side == 0 { -1 } else { 1 } * (age as i32 / 3);
+            c.blit(
+                puff,
+                x + tx + out - puff.w / 2,
+                y + ty + age as i32 / 4 - puff.h + 2,
+                bottom,
+                false,
+            );
         }
     }
 }
@@ -799,9 +910,9 @@ pub(crate) mod tests {
     fn draw(s: &RaceScene, h: i32) -> Canvas {
         let l = Layout::new(h);
         let mut c = Canvas::new(l.w, l.h);
-        let art = Art::new();
+        let art = Art::shared();
         let decor = Decor::new(s.track, s.biome);
-        race_frame(&mut c, &l, &art, &decor, s, Held::default());
+        race_frame(&mut c, &l, art, &decor, s, Held::default());
         c
     }
 
@@ -872,7 +983,8 @@ pub(crate) mod tests {
         // Under the car's nose, between its tyres: tarmac shows only at the
         // sides of the car sprite; check just outside it.
         let row = v.car_row() - 2;
-        let tarmac = c.get(90 - CAR_W / 2 - 4, row);
+        let half = Art::shared().car.get(CarFrame::Straight).body.w / 2;
+        let tarmac = c.get(90 - half - 4, row);
         assert!(
             tarmac == rgba(ASPHALT_LT) || tarmac == rgba(ASPHALT_DK) || tarmac == rgba(WHITE),
             "{tarmac:?}"
@@ -1009,32 +1121,82 @@ pub(crate) mod tests {
     #[test]
     fn car_frames_follow_steer_drift_and_spin() {
         let mut car = Car::default();
-        assert_eq!(car_frame(&car, Input::NEUTRAL, 0), CarFrame::Straight);
+        assert_eq!(car_frame(&car, Input::NEUTRAL), CarFrame::Straight);
         assert_eq!(
-            car_frame(&car, Input::new(-3, false, false), 0),
-            CarFrame::LeanLeft
+            car_frame(&car, Input::new(-3, false, false)),
+            CarFrame::LeanLeft(2)
         );
         assert_eq!(
-            car_frame(&car, Input::new(2, false, false), 0),
-            CarFrame::LeanRight
+            car_frame(&car, Input::new(-1, false, false)),
+            CarFrame::LeanLeft(1)
+        );
+        assert_eq!(
+            car_frame(&car, Input::new(2, false, false)),
+            CarFrame::LeanRight(1)
         );
         car.drift = Drift::Drifting;
         assert_eq!(
-            car_frame(&car, Input::new(3, false, true), 0),
+            car_frame(&car, Input::new(3, false, true)),
             CarFrame::DriftRight
         );
         car.vx = -2.0;
         assert_eq!(
-            car_frame(&car, Input::new(0, false, true), 0),
+            car_frame(&car, Input::new(0, false, true)),
             CarFrame::DriftLeft
         );
-        car.drift = Drift::Spin(40);
-        let frames: Vec<_> = (0..24)
-            .step_by(6)
-            .map(|t| car_frame(&car, Input::NEUTRAL, t))
+        // A spin runs through every rotation frame, the first turn fast.
+        car.vx = 0.0;
+        let frames: Vec<CarFrame> = (0..=SPIN_TICKS)
+            .rev()
+            .map(|n| {
+                car.drift = Drift::Spin(n);
+                car_frame(&car, Input::NEUTRAL)
+            })
             .collect();
-        assert_eq!(frames.len(), 4);
-        assert!(frames.windows(2).all(|p| p[0] != p[1]));
+        for k in 0..SPIN_FRAMES as u8 {
+            assert!(frames.contains(&CarFrame::Spin(k)), "frame {k}");
+        }
+        assert_eq!(frames[0], CarFrame::Spin(0));
+        let changes = |f: &[CarFrame]| f.windows(2).filter(|p| p[0] != p[1]).count();
+        let half = frames.len() / 2;
+        assert!(changes(&frames[..half]) > changes(&frames[half..]));
+        // Sliding left, it turns the other way.
+        car.vx = -2.0;
+        car.drift = Drift::Spin(SPIN_TICKS - 12);
+        let left = car_frame(&car, Input::NEUTRAL);
+        car.vx = 2.0;
+        let right = car_frame(&car, Input::NEUTRAL);
+        assert_ne!(left, right);
+    }
+
+    #[test]
+    fn the_car_lights_its_brakes_and_smokes_and_flames() {
+        let t = fixtures::drag_strip();
+        let base = scene(&t, 40.0, 0.0, 0);
+        let plain = draw(&base, 320);
+        let count = |c: &Canvas, k: u8| {
+            (0..c.h)
+                .flat_map(|y| (0..c.w).map(move |x| (x, y)))
+                .filter(|&(x, y)| c.get(x, y) == rgba(k))
+                .count()
+        };
+        let mut braking = base;
+        braking.input = Input::new(0, true, false);
+        let b = draw(&braking, 320);
+        assert!(count(&b, WHITE) > count(&plain, WHITE), "lamps lit");
+        let mut boost = base;
+        boost.car.boost_ticks = 30;
+        let f = draw(&boost, 320);
+        assert!(count(&f, YELLOW) > count(&plain, YELLOW), "a flame");
+        let mut drift = base;
+        drift.car.drift = Drift::Drifting;
+        drift.input = Input::new(2, false, true);
+        let d = draw(&drift, 320);
+        assert_ne!(d.digest(), plain.digest());
+        assert!(count(&d, ICE) > count(&plain, ICE), "smoke");
+        for c in [&b, &f, &d] {
+            assert!(c.palette_only());
+        }
     }
 
     #[test]
@@ -1047,7 +1209,9 @@ pub(crate) mod tests {
         let ghost_px = |c: &Canvas| {
             (0..c.h)
                 .flat_map(|y| (0..c.w).map(move |x| (x, y)))
-                .filter(|&(x, y)| c.get(x, y) == rgba(ICE) && none.get(x, y) != rgba(ICE))
+                .filter(|&(x, y)| {
+                    [rgba(ICE), rgba(WHITE)].contains(&c.get(x, y)) && none.get(x, y) != c.get(x, y)
+                })
                 .count()
         };
         let mut ahead = plain;
@@ -1066,7 +1230,8 @@ pub(crate) mod tests {
         let at = v.place(52.0, 1.5).unwrap();
         assert!(at.x > l.road.w / 2 && at.y < v.car_row());
         assert!((at.y - 12..at.y).any(|y| (at.x - 8..at.x + 8)
-            .any(|x| c.get(x, y) == rgba(ICE) && none.get(x, y) != rgba(ICE))));
+            .any(|x| [rgba(ICE), rgba(WHITE)].contains(&c.get(x, y))
+                && none.get(x, y) != c.get(x, y))));
         // Behind the camera (5 m back) it has no place on screen at all.
         let mut behind = plain;
         behind.ghost = Some((40.0 - 8.0, 0.0));
@@ -1084,7 +1249,7 @@ pub(crate) mod tests {
         let hidden = (40..120)
             .map(|k| k as f64 * SEG_LEN + 0.5)
             .find(|&z| {
-                let art = Art::new();
+                let art = Art::shared();
                 !v.visible((z / SEG_LEN) as i64)
                     && v.place(z, 0.0).is_some_and(|p| {
                         art.ghost
@@ -1189,6 +1354,27 @@ pub(crate) mod tests {
         s.ghost = Some((60.0 * SEG_LEN + 7.0, -2.0));
         s.ghost_note = Some(-96);
         out.push(("ghost_ahead", draw(&s, 360)));
+        // The ghost down a straight at 10, 20 and 40 m: how far it reads
+        // (the marker shows past ~15 m).
+        let strip = fixtures::drag_strip();
+        for (name, d) in [
+            ("ghost_10m", 10.0),
+            ("ghost_20m", 20.0),
+            ("ghost_40m", 40.0),
+        ] {
+            let mut s = scene(&strip, 40.0, 0.0, 0);
+            s.ghost = Some((40.0 + d, 1.0));
+            out.push((name, draw(&s, 360)));
+        }
+        // A checkpoint gate close ahead, braking for it; the finish
+        // close ahead, boosting at it.
+        let mut s = scene(&show, 120.0 * SEG_LEN - 6.0, 0.0, 0);
+        s.input = Input::new(0, true, false);
+        out.push(("gate_ahead", draw(&s, 360)));
+        let mut s = scene(&show, 180.0 * SEG_LEN - 9.0, 0.5, 0);
+        s.next_gate = 1;
+        s.car.boost_ticks = 30;
+        out.push(("finish_ahead", draw(&s, 360)));
         // One scene per biome but the meadow's (every scene above is a
         // meadow): the showcase's run-up, posts, rock and traffic ahead,
         // the backdrop scrolled to show its layers.

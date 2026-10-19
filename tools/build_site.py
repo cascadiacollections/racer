@@ -258,6 +258,8 @@ def favicon(frames):
     """The car, centred on ink in a 32x32 tile, scaled 2x."""
     f = frames["sweep_mid_curve"]
     x, y, w, h = car_box(f)
+    # A car wider or taller than the tile loses equal margins either side.
+    x, y = x + max(w - 30, 0) // 2, y + max(h - 30, 0) // 2
     w, h = min(w, 30), min(h, 30)
     tile = Img(32, 32, INK)
     tile.paste(f.crop(x, y, w, h), (32 - w) // 2, (32 - h) // 2)
