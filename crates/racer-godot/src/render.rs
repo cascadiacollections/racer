@@ -1209,7 +1209,9 @@ pub(crate) mod tests {
         let ghost_px = |c: &Canvas| {
             (0..c.h)
                 .flat_map(|y| (0..c.w).map(move |x| (x, y)))
-                .filter(|&(x, y)| c.get(x, y) == rgba(ICE) && none.get(x, y) != rgba(ICE))
+                .filter(|&(x, y)| {
+                    [rgba(ICE), rgba(WHITE)].contains(&c.get(x, y)) && none.get(x, y) != c.get(x, y)
+                })
                 .count()
         };
         let mut ahead = plain;
@@ -1228,7 +1230,8 @@ pub(crate) mod tests {
         let at = v.place(52.0, 1.5).unwrap();
         assert!(at.x > l.road.w / 2 && at.y < v.car_row());
         assert!((at.y - 12..at.y).any(|y| (at.x - 8..at.x + 8)
-            .any(|x| c.get(x, y) == rgba(ICE) && none.get(x, y) != rgba(ICE))));
+            .any(|x| [rgba(ICE), rgba(WHITE)].contains(&c.get(x, y))
+                && none.get(x, y) != c.get(x, y))));
         // Behind the camera (5 m back) it has no place on screen at all.
         let mut behind = plain;
         behind.ghost = Some((40.0 - 8.0, 0.0));

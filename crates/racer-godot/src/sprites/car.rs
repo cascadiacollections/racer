@@ -33,17 +33,27 @@ const TRIM: &[u8] = &[INK, INK, ASPHALT_DK, ASPHALT_DK, ASPHALT_LT];
 const GHOST_BODY: &[u8] = &[ICE, ICE, ICE, WHITE];
 const GHOST_GLASS: &[u8] = &[WATER];
 
-/// Pixels per metre the player's car is drawn at: about what the
-/// projection gives a car this far in front of the camera.
-pub const PLAYER_SCALE: f64 = 14.0;
-/// Camera pitch the player's car is drawn at, radians. Gentler than the
-/// camera's true angle down at the car (about 58°), so it shows its tail
-/// as well as its roof: the classic arcade cheat.
-pub const PLAYER_PITCH: f64 = 0.45;
+/// Pixels per metre the player's car is drawn at: a little more than the
+/// projection gives a car this far in front of the camera, so it sits
+/// wide on the road.
+pub const PLAYER_SCALE: f64 = 20.0;
+/// Camera pitch the player's car is drawn at, radians (12°): a low chase
+/// camera, far gentler than the road camera's true angle down at the car
+/// (about 58°), so the tail fills the sprite and the roof is a thin band:
+/// the classic arcade cheat.
+pub const PLAYER_PITCH: f64 = 0.21;
+/// Vertical squash of the player's car (and its ghost): wide and low.
+pub const PLAYER_SQUASH: f64 = 0.72;
+/// The spin's turns are seen from higher and smaller, so a car side-on
+/// is not half the road wide.
+const SPIN_PITCH: f64 = 0.45;
+const SPIN_SCALE: f64 = 14.0;
+/// Every height on the model is scaled by this: a low, stylised body.
+const LOW: f64 = 0.75;
 
 /// Turns of the body, radians, for the lean and drift poses.
-const LEAN: [f64; 2] = [0.10, 0.20];
-const DRIFT: f64 = 0.42;
+const LEAN: [f64; 2] = [0.07, 0.14];
+const DRIFT: f64 = 0.3;
 /// Rotation frames in a spin.
 pub const SPIN_FRAMES: usize = 8;
 
@@ -242,6 +252,11 @@ fn model(lit: bool, ghost: bool) -> Model {
         let (a, b) = (s * (HW - 0.04), s * (HW + 0.02));
         m.cuboid((a.min(b), a.max(b)), (-HL, -HL + 0.34), (1.06, 1.24), plate);
     }
+    for f in &mut m.faces {
+        for p in &mut f.pts {
+            p.h *= LOW;
+        }
+    }
     // The shadow: the footprint, nudged right and back, away from the light.
     m.shadow = vec![
         (-HW + 0.05, -HL - 0.15),
@@ -254,14 +269,26 @@ fn model(lit: bool, ghost: bool) -> Model {
 
 /// The rear tyres' outer contact points and the pipes' mouths, metres.
 const TYRES: [V3; 2] = [v3(-HW + 0.1, -1.45, 0.0), v3(HW - 0.1, -1.45, 0.0)];
-const PIPES: [V3; 2] = [v3(-0.42, -HL - 0.16, 0.22), v3(-0.2, -HL - 0.16, 0.22)];
+const PIPES: [V3; 2] = [
+    v3(-0.42, -HL - 0.16, 0.22 * LOW),
+    v3(-0.2, -HL - 0.16, 0.22 * LOW),
+];
 
 /// Draw one pose of the player's car.
 fn pose(f: CarFrame) -> CarSprite {
-    let v = View {
-        yaw: f.yaw(),
-        pitch: PLAYER_PITCH,
-        scale: PLAYER_SCALE,
+    let v = match f {
+        CarFrame::Spin(_) => View {
+            yaw: f.yaw(),
+            pitch: SPIN_PITCH,
+            scale: SPIN_SCALE,
+            squash: 1.0,
+        },
+        _ => View {
+            yaw: f.yaw(),
+            pitch: PLAYER_PITCH,
+            scale: PLAYER_SCALE,
+            squash: PLAYER_SQUASH,
+        },
     };
     let style = Style {
         outline: true,
@@ -340,6 +367,7 @@ pub fn ghost(scale: f64, pitch: f64) -> Sprite {
         yaw: 0.0,
         pitch,
         scale,
+        squash: PLAYER_SQUASH,
     };
     let style = Style {
         outline: true,
@@ -517,7 +545,20 @@ mod tests {
             }
         }
         let straight = art.get(CarFrame::Straight);
-        assert!(straight.body.w <= 40 && straight.body.h <= 40);
+        // Wide and low: the painted box, shadow and all, about 2:1.
+        let s = &straight.body;
+        let painted = |x: i32, y: i32| s.at(x, y) != Sprite::CLEAR;
+        let xs: Vec<i32> = (0..s.w)
+            .filter(|&x| (0..s.h).any(|y| painted(x, y)))
+            .collect();
+        let ys: Vec<i32> = (0..s.h)
+            .filter(|&y| (0..s.w).any(|x| painted(x, y)))
+            .collect();
+        let (w, h) = (xs[xs.len() - 1] - xs[0] + 1, ys[ys.len() - 1] - ys[0] + 1);
+        assert!(
+            (36..=44).contains(&w) && h <= 24 && w * 10 >= h * 17,
+            "{w}x{h}"
+        );
         assert!(straight.body.px.contains(&RED), "the car is red");
         assert!(straight.braking.px.contains(&WHITE), "lit lamps");
     }

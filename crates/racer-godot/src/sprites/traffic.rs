@@ -197,6 +197,7 @@ pub fn steps(kind: Kind, livery: Livery) -> Steps {
                 yaw: 0.0,
                 pitch: pitch_at(scale),
                 scale,
+                squash: 1.0,
             };
             let style = Style {
                 outline: scale >= 6.0,

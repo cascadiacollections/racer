@@ -500,10 +500,17 @@ drawn in code at startup, nothing is scaled or rotated at draw time.
   z-buffer, pixel centres sampled; lit from the upper left onto short
   palette ramps with a checkerboard between steps; an ink outline, ink
   creases where one part stands in front of another, an ink-checkerboard
-  ground shadow. The player's car is drawn at 14 px/m from 0.45 rad
-  (gentler than the camera's ~58° at the car, so its tail shows); traffic
-  and the ghost at each scale step from `pitch_at(scale)`, the camera's
-  true angle at that depth capped at 0.55 rad. Traffic's three smallest
+  ground shadow. The player's car is a low chase view: 20 px/m from
+  0.21 rad (12°, far gentler than the road camera's ~58° at the car),
+  heights ×0.75 and the picture squashed ×0.72, so it is wide and low
+  (about 43×19 px with its shadow) and its tail fills it; the spin's turns
+  are drawn smaller (14 px/m) from 0.45 rad so side-on it is not half the
+  road wide. Lean turns the body 0.07/0.14 rad, a drift 0.3. Traffic and
+  the ghost are drawn at each scale step from `pitch_at(scale)`, the
+  camera's true angle at that depth capped at the same 0.21 rad, so every
+  car shows its tail under a thin band of roof. A first cut drew the
+  player from 0.45 rad: it read as a tall van seen from above and hid
+  road. Traffic's three smallest
   steps (2, 3, 5 px wide) are hand-drawn maps per kind: a renderer's
   sampling loses the tail lamps at that size.
 - **Frames**: 15 poses (straight, lean 1/2 each way, drift L/R, 8 spin
@@ -515,13 +522,13 @@ drawn in code at startup, nothing is scaled or rotated at draw time.
   dark parts and a white outline solid; past ~15 m (scale under 3 px/m) a
   7×5 marker floats over it, only while some of it shows over the road.
   Owner feedback was that it went faint past ~15 m; check on the Pixel.
-- **Cost**, this machine (release): `Art::new` 7.4 ms once at startup
-  (`art_build_cost`; 60 ms in a debug build, so tests share one
-  `Art::shared`), 138,523 bytes of sprites. `raster_bench` before → after
-  (µs per 180×360 frame): MEADOW 232 → 228–236, COAST 223 → 221–223,
-  ALPINE 245 → 241–266 (noisy), DESERT 83 → 84, NIGHT 105 → 105. The larger
-  player car first cost ~15 µs a frame; `Canvas::blit` now clips columns
-  once and writes rows directly, which won it back.
+- **Cost**, this machine (release): `Art::new` 6.5 ms once at startup
+  (`art_build_cost`; ~60 ms in a debug build, so tests share one
+  `Art::shared`), 123,765 bytes of sprites. `raster_bench` before → after
+  (µs per 180×360 frame): MEADOW 232 → 229, COAST 223 → 223, ALPINE 245 →
+  244, DESERT 83 → 83, NIGHT 105 → 105. `Canvas::blit` now clips columns
+  once and writes rows directly (the first, bigger car cost ~15 µs a frame
+  through per-pixel `put`).
 - **Golden frames.** Every render golden moved (`sweep_mid_curve`,
   `hairpin_entry`, `crest_climbing`, `crest_over`, `hazards`,
   `drift_corner_signed`, `ghost_ahead`, `biome_coast`, `biome_alpine`,

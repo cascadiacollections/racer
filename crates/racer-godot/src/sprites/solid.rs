@@ -157,6 +157,9 @@ pub struct View {
     pub pitch: f64,
     /// Pixels per metre.
     pub scale: f64,
+    /// Vertical squash of the picture, 1 for none: a stylised low,
+    /// wide car is drawn at less than 1.
+    pub squash: f64,
 }
 
 /// Where the light comes from, in view space (`x` right, `y` away from
@@ -177,7 +180,7 @@ impl View {
         let (sp, cp) = self.pitch.sin_cos();
         (
             q.x * self.scale,
-            -(q.h * cp + q.y * sp) * self.scale,
+            -(q.h * cp + q.y * sp) * self.scale * self.squash,
             q.y * cp - q.h * sp,
         )
     }
@@ -460,6 +463,7 @@ mod tests {
             yaw: 0.0,
             pitch: 0.5,
             scale: 8.0,
+            squash: 1.0,
         };
         let r = render(&cube(), &v, Style::default());
         let s = &r.sprite;
@@ -486,6 +490,7 @@ mod tests {
                 yaw: 0.0,
                 pitch: 0.4,
                 scale: 8.0,
+                squash: 1.0,
             },
             Style::default(),
         );
@@ -495,6 +500,7 @@ mod tests {
                 yaw: 0.6,
                 pitch: 0.4,
                 scale: 8.0,
+                squash: 1.0,
             },
             Style::default(),
         );
@@ -506,6 +512,7 @@ mod tests {
                 yaw: 0.6,
                 pitch: 0.4,
                 scale: 8.0,
+                squash: 1.0,
             },
             Style::default(),
         );
@@ -526,6 +533,7 @@ mod tests {
             yaw: 0.3,
             pitch: 0.4,
             scale: 6.0,
+            squash: 1.0,
         };
         let r = render(&cube(), &v, Style::default());
         let c = crop_centred(&r);

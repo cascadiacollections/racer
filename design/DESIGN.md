@@ -277,12 +277,13 @@ Decided, not built:
   pose and scale step: flat faces lit from the upper left on short
   palette ramps, a checkerboard between steps (dithering only, no
   blends), an ink outline and an ink-checkerboard ground shadow. The
-  player's car (an original red hatch-coupe) has straight, two lean steps
+  player's car (an original red hatch-coupe, seen from a low chase angle,
+  wide and low) has straight, two lean steps
   each way, drift left/right and eight spin frames, each with brake lamps
   off and lit; tyre smoke and the boost flame are separate small sprites
   at points each frame records. Traffic is three kinds (hatchback, box
   van, pickup) in blue, yellow and white, drawn per step from the angle
-  the camera sees that depth at; the three smallest steps are hand-drawn
+  the camera sees that depth at, capped at the player's low angle; the three smallest steps are hand-drawn
   pixel maps. Cars use only the fixed indices. Roadside things are
   shapes in metres sampled per step, edged on the shadow side once a step
   can carry it. The ghost is the player's car, pale, its body

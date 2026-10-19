@@ -93,13 +93,13 @@ fn sample(w: i32, h: i32, shape: &impl Fn(f64, f64, i32, i32) -> u8) -> Sprite {
 
 /// The camera's angle down at something `scale` pixels a metre away,
 /// radians: steep close to the camera, nearly level far off. Pre-drawn
-/// cars at a scale step are drawn from this angle, so a far car shows its
-/// tail and a near one its roof. Capped where the roof would hide the
-/// tail.
+/// cars at a scale step are drawn from this angle, capped at the player's
+/// low chase angle ([`car::PLAYER_PITCH`]): every car shows mostly its
+/// tail under a thin band of roof, never a top-down view.
 pub fn pitch_at(scale: f64) -> f64 {
     let cam = crate::project::Camera::DEFAULT;
     let dz = cam.focal / scale.max(1e-3);
-    (cam.height / dz).atan().min(0.55)
+    (cam.height / dz).atan().min(car::PLAYER_PITCH)
 }
 
 /// Every sprite the game draws.
