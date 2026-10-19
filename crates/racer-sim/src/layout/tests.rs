@@ -326,6 +326,97 @@ fn layout_files_and_provenance_read_back() {
     assert_eq!(LayoutFile::parse("# nothing here\n"), None);
 }
 
+// ------------------------------------------------- run files of custom races
+
+/// Drive a custom race of `layout` with [`script`] to its end, save it as
+/// a run file the way the game does, and return the live run and the text.
+fn saved_custom(layout: &Layout, timed: bool) -> (RunState, String) {
+    use crate::replay::{encode_run, Ending, Replay, RunFile};
+    let raced = if timed {
+        layout.clone()
+    } else {
+        layout.unproven()
+    };
+    let track = Arc::new(raced.raced_track().unwrap());
+    assert_eq!(!track.allot_ticks().is_empty(), timed);
+    let mut run = RunState::single(raced.hash(), track, CUSTOM_LOADOUT);
+    let mut n = 0;
+    while run.phase() == RunPhase::Racing {
+        run.step(script(n));
+        n += 1;
+    }
+    let f = RunFile {
+        epoch: crate::SIM_EPOCH,
+        ending: if run.phase() == RunPhase::Won {
+            Ending::Won
+        } else {
+            Ending::Lost
+        },
+        replay: Replay::of(&run),
+        layout: Some(raced.to_code().unwrap()),
+    };
+    (run, encode_run(&f))
+}
+
+/// Replay a run file's custom race from its text alone.
+fn replay_custom(text: &str) -> RunState {
+    let f = crate::replay::decode_run(text).unwrap();
+    let layout = Layout::from_code(f.layout.as_deref().unwrap()).unwrap();
+    assert_eq!(layout.hash(), f.replay.run_seed, "keyed by its road");
+    let track = Arc::new(layout.raced_track().unwrap());
+    f.replay
+        .reconstruct_single(track, CUSTOM_LOADOUT, |_| {})
+        .unwrap()
+}
+
+#[test]
+fn a_custom_race_saves_as_a_v2_run_file_that_replays_exactly() {
+    let proven = bundled::layouts().remove(0);
+    for timed in [true, false] {
+        let (live, text) = saved_custom(&proven, timed);
+        assert!(text.starts_with("racer-run 2\nepoch "), "{text}");
+        let code_line = text.lines().nth(4).unwrap();
+        let prefix = if timed { "layout RL" } else { "layout RD" };
+        assert!(code_line.starts_with(prefix), "{code_line}");
+        let f = crate::replay::decode_run(&text).unwrap();
+        assert_eq!(crate::replay::encode_run(&f), text, "round trip");
+        let back = replay_custom(&text);
+        assert_eq!(state_hash(&back), state_hash(&live), "timed {timed}");
+        assert_eq!(back.results(), live.results());
+    }
+    // A proof from older rules still replays with the timers it raced
+    // with: raced_track does not ask the stamp.
+    let old = Layout::from_code(FIRST_LIGHT_RULES_1).unwrap();
+    let (live, text) = saved_custom(&old, true);
+    assert_eq!(state_hash(&replay_custom(&text)), state_hash(&live));
+}
+
+#[test]
+fn run_files_of_both_versions_read_and_damaged_layout_lines_do_not() {
+    use crate::replay::{decode_run, RunFileError};
+    let v1 = "racer-run 1\nepoch 1\nending won\nseed 0x0000000000000007\nlog v1 3:C\n";
+    let f = decode_run(v1).unwrap();
+    assert_eq!(f.layout, None);
+    assert_eq!(crate::replay::encode_run(&f), v1, "generated runs stay v1");
+    let code = hand_made().to_code().unwrap();
+    let v2 = format!(
+        "racer-run 2\nepoch 1\nending lost\nseed 0x0000000000000007\nlayout {code}\nlog v1 3:C\n"
+    );
+    assert_eq!(decode_run(&v2).unwrap().layout.as_deref(), Some(&*code));
+    for bad in [
+        "racer-run 2\nepoch 1\nending lost\nseed 0x07\nlog v1 3:C\n".to_string(),
+        "racer-run 2\nepoch 1\nending lost\nseed 0x0000000000000007\nlayout \nlog v1\n".into(),
+        "racer-run 2\nepoch 1\nending lost\nseed 0x0000000000000007\nlayout A B\nlog v1\n".into(),
+        "racer-run 2\nepoch 1\nending lost\nseed 0x0000000000000007\nlog v1 3:C\n".into(),
+    ] {
+        assert!(decode_run(&bad).is_err(), "{bad}");
+    }
+    assert_eq!(
+        decode_run("racer-run 2\nepoch 1\nending won\nseed 0x0000000000000007\nlog v1\n"),
+        Err(RunFileError::Field("layout"))
+    );
+}
+
 // ------------------------------------------------------ long layouts (§9.4)
 
 #[test]

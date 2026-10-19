@@ -487,19 +487,34 @@ impl Game {
 
     /// Queue the current run for saving, unless DEMO drove it.
     fn save_run(&mut self, ending: Ending) {
-        let (Some(run), None, None) = (&self.run, &self.demo, &self.custom) else {
-            // A custom race's replay needs its layout, which a run file
-            // does not hold yet (DESIGN §9.8).
+        let (Some(run), None) = (&self.run, &self.demo) else {
             return;
+        };
+        // A custom race carries its layout as raced: with the proof whose
+        // timers it raced under, or none for a free drive (a version 2 run
+        // file, DESIGN §9.6).
+        let layout = self.custom.as_ref().and_then(|c| {
+            let raced = if c.timed {
+                c.layout.clone()
+            } else {
+                c.layout.unproven()
+            };
+            raced.to_code().ok()
+        });
+        let kind = if layout.is_some() {
+            "run-layout"
+        } else {
+            "run"
         };
         let f = RunFile {
             epoch: racer_sim::SIM_EPOCH,
             ending,
             replay: Replay::of(run),
+            layout,
         };
         let name = match self.attempt {
-            0 => format!("run-{:016x}.txt", f.replay.run_seed),
-            n => format!("run-{:016x}-{n}.txt", f.replay.run_seed),
+            0 => format!("{kind}-{:016x}.txt", f.replay.run_seed),
+            n => format!("{kind}-{:016x}-{n}.txt", f.replay.run_seed),
         };
         self.fx.push(Effect::SaveRun {
             name,
@@ -1351,13 +1366,34 @@ mod tests {
             .track()
             .allot_ticks()
             .is_empty());
+        let mut fx = Vec::new();
         for _ in 0..2000 {
-            frame(&mut g, vec![], vec![]);
+            fx.extend(frame(&mut g, vec![], vec![]));
             if g.mode != Mode::Racing {
                 break;
             }
         }
         assert_eq!(g.mode, Mode::Results, "finished the strip");
+        // Saved as a version 2 run file that replays from its layout alone.
+        let saved: Vec<_> = fx
+            .iter()
+            .filter_map(|e| match e {
+                Effect::SaveRun { name, text } => Some((name.clone(), text.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].0, format!("run-layout-{:016x}.txt", key.0));
+        let f = racer_sim::replay::decode_run(&saved[0].1).unwrap();
+        let l = Layout::from_code(f.layout.as_deref().unwrap()).unwrap();
+        let back = f
+            .replay
+            .reconstruct_single(Arc::new(l.raced_track().unwrap()), CUSTOM_LOADOUT, |_| {})
+            .unwrap();
+        assert_eq!(
+            racer_sim::run::state_hash(&back),
+            racer_sim::run::state_hash(g.run.as_ref().unwrap())
+        );
         assert_eq!(g.run.as_ref().unwrap().phase(), RunPhase::Won);
         assert!(g.ghosts().get(key).is_some(), "kept under the layout's key");
         // RETRY COURSE races it again, with its ghost.

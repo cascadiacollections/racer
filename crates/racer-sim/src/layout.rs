@@ -530,6 +530,19 @@ impl Layout {
         Some(t)
     }
 
+    /// The track a saved custom race replays on (a run file's layout,
+    /// `replay::RunFile::layout`): with the timers its proof carries,
+    /// whatever its [`Layout::standing`], because those are the timers it
+    /// was raced with; untimed without one. The game saves a timed race's
+    /// layout with the proof it raced under and a free drive's without.
+    pub fn raced_track(&self) -> Result<Track, Problem> {
+        let mut t = self.track()?;
+        if let Some(p) = &self.proof {
+            t.set_allotments(p.allot_ticks.clone());
+        }
+        Ok(t)
+    }
+
     /// The layout's noise seed for proving: a pure function of the road.
     pub fn seed(&self) -> u64 {
         substream(self.hash(), PROVE_TAG)
