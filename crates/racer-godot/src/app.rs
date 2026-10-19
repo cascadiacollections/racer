@@ -78,7 +78,7 @@ use racer_sim::run::{RunPhase, RunState, TrackCache};
 use racer_sim::track::{fixtures, Track};
 use racer_sim::DT;
 
-use crate::audio::{loop_targets, Loops, Mixer, Sfx, Watch};
+use crate::audio::{loop_targets, Loops, Mixer, Sfx, Tune, Watch};
 use crate::builder::{Build, Key};
 use crate::custom::Custom;
 use crate::daily::{self, DailyRecord, Score};
@@ -143,8 +143,8 @@ pub enum Effect {
     Sound(Sfx),
     /// Set the engine and tyre loops: start, stop or retune them.
     Loops(Loops),
-    /// Start or stop the title music.
-    Music(bool),
+    /// Play a title tune (stopping any other), or stop the music.
+    Music(Option<Tune>),
     /// The best-per-track store changed: write `text`
     /// ([`GhostStore::encode`]) as [`GHOSTS_FILE`] in the user data
     /// directory. Never for DEMO.
@@ -222,8 +222,8 @@ pub struct Game {
     /// Watches the race on screen for one-shots.
     watch: Option<Watch>,
     mixer: Mixer,
-    /// Whether the title music was last asked to play.
-    music: bool,
+    /// The title tune last asked to play, if any.
+    music: Option<Tune>,
     /// The fastest finish per track.
     ghosts: GhostStore,
     /// The ghost on the track being raced, if it has a stored best.
@@ -312,7 +312,7 @@ impl Game {
             sfx: Vec::new(),
             watch: None,
             mixer: Mixer::default(),
-            music: false,
+            music: None,
             results_sel: 0,
             ghosts: GhostStore::new(),
             ghost: None,
@@ -553,7 +553,9 @@ impl Game {
             sfx.clear();
         }
         let mut seen = Vec::with_capacity(sfx.len());
+        let season = self.season();
         for s in sfx.drain(..) {
+            let s = s.seasonal(season);
             if !seen.contains(&s) {
                 seen.push(s);
                 self.fx.push(Effect::Sound(s));
@@ -566,10 +568,12 @@ impl Game {
             }
             _ => None,
         };
-        if let Some(l) = self.mixer.update(delta, target) {
+        let ambient = season == Season::Halloween;
+        if let Some(l) = self.mixer.update(delta, target, ambient) {
             self.fx.push(Effect::Loops(l));
         }
-        let music = !quiet && matches!(self.mode, Mode::Title | Mode::Building | Mode::Editor);
+        let music = (!quiet && matches!(self.mode, Mode::Title | Mode::Building | Mode::Editor))
+            .then(|| Tune::of(season));
         if music != self.music {
             self.music = music;
             self.fx.push(Effect::Music(music));
@@ -1345,13 +1349,13 @@ mod tests {
     fn the_title_has_music_and_racing_has_the_engine_instead() {
         let mut g = game(30.0);
         let fx = frame(&mut g, vec![], vec![]);
-        assert!(fx.contains(&Effect::Music(true)));
+        assert!(fx.contains(&Effect::Music(Some(Tune::Title))));
         let fx = frame(&mut g, vec![Event::Key(K::Enter)], vec![]);
         assert_eq!(sounds(&fx), vec![Sfx::Click]);
         let mut fx = frame(&mut g, vec![], vec![]);
         fx.extend(frame(&mut g, vec![], vec![]));
         assert_eq!(g.mode, Mode::Racing);
-        assert!(fx.contains(&Effect::Music(false)));
+        assert!(fx.contains(&Effect::Music(None)));
         let started = loops(&fx).expect("the engine starts with the race");
         assert!(started.engine_volume > 0 && started.drift_volume == 0);
         let mut last = started;
@@ -1407,7 +1411,7 @@ mod tests {
         assert!(g.mixer.sent().silent(), "the engine stopped");
         let fx = frame(&mut g, vec![Event::Key(K::Space)], vec![]);
         assert_eq!(sounds(&fx), vec![Sfx::Click]);
-        assert!(fx.contains(&Effect::Music(true)));
+        assert!(fx.contains(&Effect::Music(Some(Tune::Title))));
     }
 
     /// Track 1 is two gates of straight road with time to spare; every
@@ -1647,8 +1651,37 @@ mod tests {
     }
 
     #[test]
+    fn in_season_the_stingers_and_the_tune_are_halloweens_and_the_wind_blows() {
+        let mut g = game(3.0);
+        g.forced_season = Some(Season::Halloween);
+        let fx = frame(&mut g, vec![], vec![]);
+        assert!(fx.contains(&Effect::Music(Some(Tune::Halloween))));
+        start(&mut g);
+        let mut heard = Vec::new();
+        let mut ambient = 0;
+        for _ in 0..300 {
+            let fx = frame(&mut g, vec![], vec![]);
+            heard.extend(sounds(&fx));
+            ambient = ambient.max(g.mixer.sent().ambient_volume);
+        }
+        assert_eq!(g.mode, Mode::Results);
+        assert_eq!(heard, vec![Sfx::Tick, Sfx::Tick, Sfx::TimeUpHalloween]);
+        assert!(ambient > 0, "the wind under the engine");
+        assert!(g.mixer.sent().silent(), "and gone off the road");
+        let fx = frame(&mut g, vec![Event::Key(K::Space)], vec![]);
+        assert!(fx.contains(&Effect::Music(Some(Tune::Halloween))));
+    }
+
+    #[test]
     fn the_demo_is_silent() {
+        for season in [Season::None, Season::Halloween] {
+            demo_is_silent(season);
+        }
+    }
+
+    fn demo_is_silent(season: Season) {
         let mut g = game(60.0);
+        g.forced_season = Some(season);
         frame(&mut g, vec![], vec![]);
         g.set_buttons(vec![Button {
             rect: crate::layout::Rect::new(0, 0, 180, 400),
@@ -1668,11 +1701,11 @@ mod tests {
         }
         assert!(g.run.as_ref().unwrap().index() >= 1, "DEMO reached a fork");
         assert!(sounds(&fx).is_empty(), "{:?}", sounds(&fx));
-        assert!(!fx.contains(&Effect::Music(true)));
+        assert!(!fx.iter().any(|e| matches!(e, Effect::Music(Some(_)))));
         assert!(fx
             .iter()
             .all(|e| !matches!(e, Effect::Loops(l) if !l.silent())));
-        assert!(fx.contains(&Effect::Music(false)), "the title music stops");
+        assert!(fx.contains(&Effect::Music(None)), "the title music stops");
     }
 
     #[test]

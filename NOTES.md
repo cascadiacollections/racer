@@ -608,5 +608,22 @@ GHOST COVE, HAUNTED PINES, BLOOD MOON MESA, MONSTER CITY.
   it was written (daily, ghosts, the editor and codes, biomes, sound,
   sprites). `pages.yml`'s path filters follow the sprites directory,
   scenery, season and screens.
+- **Audio.** `tools/gen_audio.py` makes five more files, all original:
+  `music_halloween` (19.2 s loop, 100 bpm, eight bars of D minor at
+  12 kHz: a theremin-like lead with 5.5 Hz vibrato, a triangle bass
+  plodding in quarters, a tubular bell on bars 1 and 5; smpl loop like
+  the title's), `chime_halloween` (two bell strikes a tritone apart,
+  slightly detuned), `time_up_halloween` (a theremin falling two octaves
+  over a low bell), `win_halloween` (a D minor organ arpeggio onto a held
+  D major chord) and `ambient_halloween` (3 s of swaying band-passed wind
+  and a faint moan at 11 kHz, crossfaded into a loop). 40 + 62 + 75 + 66
+  + 461 KB = 704 KB. `audio.rs`: `Sfx::seasonal` swaps the chime, time up
+  and win in season; `Effect::Music` now names a `Tune` (title or
+  Halloween); the mixer eases the ambient loop to 0.5 while racing in
+  season, under the engine. Tested: season on gives the Halloween tune
+  and stingers and the wind while racing; season off is unchanged; DEMO
+  is silent either way. The node loads the extra players. `.import`
+  files are Godot's defaults. Levels and sounds are first guesses made
+  without a speaker: they need ears.
 - Not tried on a phone: whether the bats read at the Pixel's density and
   how dark the twins' night skies look on its panel.

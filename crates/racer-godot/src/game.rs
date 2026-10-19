@@ -31,7 +31,7 @@ use godot::obj::EngineEnum;
 use godot::prelude::*;
 
 use crate::app::{Effect, Game};
-use crate::audio::{Loops, Sfx, DRIFT_FILE, ENGINE_FILE, MUSIC_FILE};
+use crate::audio::{Loops, Sfx, Tune, AMBIENT_FILE, DRIFT_FILE, ENGINE_FILE};
 use crate::builder::{generate, worker_count, Worker};
 use crate::frame::{frame_cap, tighter_cap, Redraw};
 use crate::input::{self, Event, Intents};
@@ -77,14 +77,16 @@ const TRIGGER_PULL: f32 = 0.5;
 /// The title music sits under the effects.
 const MUSIC_DB: f32 = -7.0;
 
-/// The players: one per one-shot (in `Sfx::ALL` order), the two loops and
-/// the music. `None` where the file failed to load: that sound is silent.
+/// The players: one per one-shot (in `Sfx::ALL` order), the three loops
+/// and one per title tune (in `Tune::ALL` order). `None` where the file
+/// failed to load: that sound is silent.
 #[derive(Default)]
 struct Players {
     sfx: Vec<Option<Gd<AudioStreamPlayer>>>,
     engine: Option<Gd<AudioStreamPlayer>>,
     drift: Option<Gd<AudioStreamPlayer>>,
-    music: Option<Gd<AudioStreamPlayer>>,
+    ambient: Option<Gd<AudioStreamPlayer>>,
+    music: Vec<Option<Gd<AudioStreamPlayer>>>,
 }
 
 /// A linear volume in thousandths, in decibels.
@@ -537,7 +539,11 @@ impl Racer {
             sfx,
             engine: self.player(ENGINE_FILE, -80.0),
             drift: self.player(DRIFT_FILE, -80.0),
-            music: self.player(MUSIC_FILE, MUSIC_DB),
+            ambient: self.player(AMBIENT_FILE, -80.0),
+            music: Tune::ALL
+                .iter()
+                .map(|t| self.player(t.file(), MUSIC_DB))
+                .collect(),
         };
     }
 
@@ -668,15 +674,20 @@ impl Racer {
                     engine_pitch,
                     engine_volume,
                     drift_volume,
+                    ambient_volume,
                 }) => {
                     set_loop(&mut self.audio.engine, engine_volume, Some(engine_pitch));
                     set_loop(&mut self.audio.drift, drift_volume, None);
+                    set_loop(&mut self.audio.ambient, ambient_volume, None);
                 }
-                Effect::Music(on) => {
-                    if let Some(p) = &mut self.audio.music {
-                        if on && !p.is_playing() {
-                            p.play();
-                        } else if !on {
+                Effect::Music(tune) => {
+                    for (t, p) in Tune::ALL.iter().zip(self.audio.music.iter_mut()) {
+                        let Some(p) = p else { continue };
+                        if Some(*t) == tune {
+                            if !p.is_playing() {
+                                p.play();
+                            }
+                        } else {
                             p.stop();
                         }
                     }

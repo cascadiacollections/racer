@@ -391,6 +391,12 @@ November 1 inclusive, every year.**
   untouched. The title shows HAPPY HALLOWEEN between two flickering
   jack-o'-lanterns, the rolling road and its name are twins, and the fork
   cards name the twin.
+- **Sound.** In season the title plays its own loop (D minor, a
+  theremin-like lead with vibrato over a plodding bass and a tubular
+  bell), the gate chime, time up and the win are spooky variants, and a
+  quiet wind-and-moan loop sits under the engine while racing. All are
+  made by `tools/gen_audio.py` like the rest (checked by `just
+  check-audio`); DEMO stays silent.
 - **Palette rule.** Each twin is one more 16-colour table changing only
   the six scenery indices (grass ×2, sky ×2, hills, brown); oranges are
   red and yellow side by side (dithering, never a new colour). HUD, road,

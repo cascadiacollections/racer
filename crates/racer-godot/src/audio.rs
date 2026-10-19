@@ -6,7 +6,7 @@
 //! ```text
 //!  sim tick ──► Watch::step ──► Sfx (one-shots) ──► Effect::Sound(sfx)
 //!  each frame: car ──► targets ──► Mixer (fade, ≤ 30 updates/s) ──► Effect::Loops
-//!  mode: title (not DEMO) ──► Effect::Music(on)
+//!  mode: title (not DEMO) ──► Effect::Music(Some(tune of the season))
 //! ```
 //!
 //! One-shots come from changes between sim ticks, so a frame that runs two
@@ -15,10 +15,17 @@
 //! title) and sends a new level only when it moved, at most
 //! [`LOOP_UPDATE_HZ`] times a second. DEMO is silent: the core asks for
 //! nothing while the bot drives.
+//!
+//! In the Halloween season (DESIGN §5.2) the title plays
+//! [`Tune::Halloween`], the gate chime, time up and the win are their
+//! spooky variants ([`Sfx::seasonal`]), and a quiet wind loop
+//! ([`AMBIENT_FILE`]) sits under the engine while racing.
 
 use racer_sim::car::Car;
 use racer_sim::race::{Phase, Race};
 use racer_sim::TICKS_PER_SEC;
+
+use crate::season::Season;
 
 /// A one-shot sound.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -39,12 +46,18 @@ pub enum Sfx {
     TimeUp,
     /// The last track finished: the run is won.
     Win,
+    /// [`Sfx::Chime`] in the Halloween season: an eerie bell.
+    ChimeHalloween,
+    /// [`Sfx::TimeUp`] in the Halloween season: a ghostly falling sting.
+    TimeUpHalloween,
+    /// [`Sfx::Win`] in the Halloween season: a spooky fanfare.
+    WinHalloween,
 }
 
 impl Sfx {
     /// Every one-shot, in declaration order: the node keeps one player per
     /// entry and finds a sound's at `sfx as usize`.
-    pub const ALL: [Sfx; 8] = [
+    pub const ALL: [Sfx; 11] = [
         Sfx::Click,
         Sfx::Chime,
         Sfx::Tick,
@@ -53,7 +66,21 @@ impl Sfx {
         Sfx::Spin,
         Sfx::TimeUp,
         Sfx::Win,
+        Sfx::ChimeHalloween,
+        Sfx::TimeUpHalloween,
+        Sfx::WinHalloween,
     ];
+
+    /// The sound to play for this one in `season`: the Halloween variant
+    /// where there is one, otherwise itself.
+    pub fn seasonal(self, season: Season) -> Sfx {
+        match (season, self) {
+            (Season::Halloween, Sfx::Chime) => Sfx::ChimeHalloween,
+            (Season::Halloween, Sfx::TimeUp) => Sfx::TimeUpHalloween,
+            (Season::Halloween, Sfx::Win) => Sfx::WinHalloween,
+            (_, s) => s,
+        }
+    }
 
     /// Its file under `res://art/audio/`, without `.wav`.
     pub fn file(self) -> &'static str {
@@ -66,6 +93,9 @@ impl Sfx {
             Sfx::Spin => "spin",
             Sfx::TimeUp => "time_up",
             Sfx::Win => "win",
+            Sfx::ChimeHalloween => "chime_halloween",
+            Sfx::TimeUpHalloween => "time_up_halloween",
+            Sfx::WinHalloween => "win_halloween",
         }
     }
 }
@@ -76,6 +106,41 @@ pub const ENGINE_FILE: &str = "engine";
 pub const DRIFT_FILE: &str = "drift";
 /// The title music loop.
 pub const MUSIC_FILE: &str = "music";
+/// The Halloween season's ambient loop (wind and a faint moan), under the
+/// engine while racing.
+pub const AMBIENT_FILE: &str = "ambient_halloween";
+/// Its volume while racing in the season, linear: quiet, under the engine.
+pub const AMBIENT_LEVEL: f64 = 0.5;
+
+/// A title music loop.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Tune {
+    /// The usual title music.
+    Title,
+    /// The Halloween season's.
+    Halloween,
+}
+
+impl Tune {
+    /// Every tune: the node keeps one player per entry, at `tune as usize`.
+    pub const ALL: [Tune; 2] = [Tune::Title, Tune::Halloween];
+
+    /// The title music in `season`.
+    pub fn of(season: Season) -> Tune {
+        match season {
+            Season::Halloween => Tune::Halloween,
+            Season::None => Tune::Title,
+        }
+    }
+
+    /// Its file under `res://art/audio/`, without `.wav`.
+    pub fn file(self) -> &'static str {
+        match self {
+            Tune::Title => MUSIC_FILE,
+            Tune::Halloween => "music_halloween",
+        }
+    }
+}
 
 /// The engine and tyre loops' levels, in thousandths: pitch scale (1000 is
 /// the file's own pitch) and linear volume (1000 is full). A volume of zero
@@ -88,12 +153,14 @@ pub struct Loops {
     pub engine_volume: u16,
     /// The tyre screech's volume, thousandths.
     pub drift_volume: u16,
+    /// The seasonal ambient loop's volume, thousandths (0 out of season).
+    pub ambient_volume: u16,
 }
 
 impl Loops {
-    /// Whether both loops are silent.
+    /// Whether every loop is silent.
     pub fn silent(&self) -> bool {
-        self.engine_volume == 0 && self.drift_volume == 0
+        self.engine_volume == 0 && self.drift_volume == 0 && self.ambient_volume == 0
     }
 }
 
@@ -198,6 +265,7 @@ pub struct Mixer {
     pitch: f64,
     engine: f64,
     drift: f64,
+    ambient: f64,
     sent: Loops,
     since: f64,
 }
@@ -223,8 +291,20 @@ impl Mixer {
     }
 
     /// One frame of `delta` seconds toward `target` (pitch, engine, tyres),
-    /// or toward silence. The levels to send, if it is time to.
-    pub fn update(&mut self, delta: f64, target: Option<(f64, f64, f64)>) -> Option<Loops> {
+    /// or toward silence; the ambient loop toward [`AMBIENT_LEVEL`] while
+    /// there is a target and `ambient` is on (the season). The levels to
+    /// send, if it is time to.
+    pub fn update(
+        &mut self,
+        delta: f64,
+        target: Option<(f64, f64, f64)>,
+        ambient: bool,
+    ) -> Option<Loops> {
+        let ambient = if ambient && target.is_some() {
+            AMBIENT_LEVEL
+        } else {
+            0.0
+        };
         let (pitch, engine, drift) = target.unwrap_or((self.pitch, 0.0, 0.0));
         // Pitch follows the car directly: its speed is already smooth, and
         // a silent engine keeps its last pitch to fade back in from.
@@ -233,11 +313,13 @@ impl Mixer {
         }
         self.engine = approach(self.engine, engine, delta);
         self.drift = approach(self.drift, drift, delta);
+        self.ambient = approach(self.ambient, ambient, delta);
         self.since += delta;
         let next = Loops {
             engine_pitch: thousandths(self.pitch),
             engine_volume: thousandths(self.engine),
             drift_volume: thousandths(self.drift),
+            ambient_volume: thousandths(self.ambient),
         };
         if next == self.sent {
             return None;
@@ -245,7 +327,8 @@ impl Mixer {
         // Starting or stopping a loop goes out at once; anything else waits
         // its turn.
         let edge = (next.engine_volume == 0) != (self.sent.engine_volume == 0)
-            || (next.drift_volume == 0) != (self.sent.drift_volume == 0);
+            || (next.drift_volume == 0) != (self.sent.drift_volume == 0)
+            || (next.ambient_volume == 0) != (self.sent.ambient_volume == 0);
         if !edge && self.since < 1.0 / LOOP_UPDATE_HZ {
             return None;
         }
@@ -259,9 +342,11 @@ impl Mixer {
     pub fn silence(&mut self) -> Option<Loops> {
         self.engine = 0.0;
         self.drift = 0.0;
+        self.ambient = 0.0;
         let next = Loops {
             engine_volume: 0,
             drift_volume: 0,
+            ambient_volume: 0,
             ..self.sent
         };
         (next != self.sent).then(|| {
@@ -281,7 +366,8 @@ mod tests {
         let files = Sfx::ALL
             .iter()
             .map(|s| s.file())
-            .chain([ENGINE_FILE, DRIFT_FILE, MUSIC_FILE]);
+            .chain([ENGINE_FILE, DRIFT_FILE, AMBIENT_FILE])
+            .chain(Tune::ALL.iter().map(|t| t.file()));
         for f in files {
             let p = dir.join(format!("{f}.wav"));
             assert!(p.is_file(), "{} missing: run `just gen-audio`", p.display());
@@ -289,6 +375,32 @@ mod tests {
         for (i, s) in Sfx::ALL.iter().enumerate() {
             assert_eq!(*s as usize, i, "Sfx::ALL is in declaration order");
         }
+        for (i, t) in Tune::ALL.iter().enumerate() {
+            assert_eq!(*t as usize, i, "Tune::ALL is in declaration order");
+        }
+    }
+
+    #[test]
+    fn the_season_swaps_the_stingers_and_the_tune_and_nothing_else() {
+        let h = Season::Halloween;
+        assert_eq!(Sfx::Chime.seasonal(h), Sfx::ChimeHalloween);
+        assert_eq!(Sfx::TimeUp.seasonal(h), Sfx::TimeUpHalloween);
+        assert_eq!(Sfx::Win.seasonal(h), Sfx::WinHalloween);
+        for s in [
+            Sfx::Click,
+            Sfx::Tick,
+            Sfx::BoostMini,
+            Sfx::BoostSuper,
+            Sfx::Spin,
+        ] {
+            assert_eq!(s.seasonal(h), s);
+        }
+        for s in Sfx::ALL {
+            assert_eq!(s.seasonal(Season::None), s, "out of season: unchanged");
+        }
+        assert_eq!(Tune::of(h), Tune::Halloween);
+        assert_eq!(Tune::of(Season::None), Tune::Title);
+        assert_eq!(Tune::Title.file(), MUSIC_FILE);
     }
 
     use racer_sim::input::Input;
@@ -367,21 +479,21 @@ mod tests {
     fn the_mixer_fades_in_rate_limits_and_fades_out() {
         let mut m = Mixer::default();
         let dt = 1.0 / 120.0;
-        let first = m.update(dt, Some((1.0, 1.0, 0.0))).unwrap();
+        let first = m.update(dt, Some((1.0, 1.0, 0.0)), false).unwrap();
         assert!(first.engine_volume > 0 && first.engine_volume < 1000);
         assert_eq!(first.engine_pitch, 1000);
         // At 120 fps, at most one update in every four frames.
         let sent = (0..120)
-            .filter(|_| m.update(dt, Some((1.0, 1.0, 0.0))).is_some())
+            .filter(|_| m.update(dt, Some((1.0, 1.0, 0.0)), false).is_some())
             .count();
         assert!((3..=31).contains(&sent), "{sent}");
         assert_eq!(m.sent().engine_volume, 1000);
         // Steady levels send nothing.
-        assert!((0..30).all(|_| m.update(dt, Some((1.0, 1.0, 0.0))).is_none()));
+        assert!((0..30).all(|_| m.update(dt, Some((1.0, 1.0, 0.0)), false).is_none()));
         // Silence fades out within a fifth of a second and then stops.
         let mut last = None;
         for _ in 0..24 {
-            if let Some(l) = m.update(dt, None) {
+            if let Some(l) = m.update(dt, None, false) {
                 last = Some(l);
             }
         }
@@ -389,5 +501,29 @@ mod tests {
         assert!(last.silent());
         assert_eq!(last.engine_pitch, 1000, "the pitch is kept");
         assert!(m.silence().is_none(), "already silent");
+    }
+
+    #[test]
+    fn the_ambient_loop_plays_only_while_racing_in_season() {
+        let dt = 1.0 / 60.0;
+        let race = Some((1.0, 0.8, 0.0));
+        let mut m = Mixer::default();
+        for _ in 0..60 {
+            m.update(dt, race, false);
+        }
+        assert_eq!(m.sent().ambient_volume, 0, "out of season");
+        for _ in 0..60 {
+            m.update(dt, race, true);
+        }
+        assert_eq!(m.sent().ambient_volume, thousandths(AMBIENT_LEVEL));
+        assert!(
+            m.sent().ambient_volume < m.sent().engine_volume,
+            "under the engine"
+        );
+        // Off the road (no target) it fades out with the engine.
+        for _ in 0..60 {
+            m.update(dt, None, true);
+        }
+        assert!(m.sent().silent());
     }
 }
