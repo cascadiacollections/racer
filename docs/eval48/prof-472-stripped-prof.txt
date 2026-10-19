@@ -1,0 +1,17 @@
+raster mean 0.765 p95 1.059 ms | process mean 2.095 p95 3.513 ms | frame mean 8.40 p95 8.50 ms, 119.1 fps | n 239 | track 1 seg 6 curve 0 elev 0.0
+raster mean 0.787 p95 0.950 ms | process mean 2.110 p95 3.543 ms | frame mean 8.33 p95 8.33 ms, 120.0 fps | n 241 | track 1 seg 21 curve 0 elev 0.0
+raster mean 0.776 p95 0.953 ms | process mean 2.060 p95 3.482 ms | frame mean 8.32 p95 8.33 ms, 120.2 fps | n 241 | track 1 seg 42 curve 25 elev 0.0 CURVE
+raster mean 0.839 p95 1.065 ms | process mean 2.168 p95 3.474 ms | frame mean 8.32 p95 8.33 ms, 120.2 fps | n 241 | track 1 seg 65 curve 25 elev 0.0 CURVE
+raster mean 0.785 p95 1.076 ms | process mean 2.196 p95 3.593 ms | frame mean 8.33 p95 8.33 ms, 120.1 fps | n 241 | track 1 seg 89 curve 21 elev 0.0 CURVE
+raster mean 0.847 p95 1.042 ms | process mean 2.251 p95 3.508 ms | frame mean 8.33 p95 8.33 ms, 120.0 fps | n 241 | track 1 seg 114 curve 22 elev 0.0 CURVE
+raster mean 0.813 p95 1.078 ms | process mean 2.234 p95 3.715 ms | frame mean 8.33 p95 8.33 ms, 120.0 fps | n 241 | track 1 seg 134 curve -72 elev 0.0 CURVE
+raster mean 0.807 p95 0.998 ms | process mean 2.189 p95 3.763 ms | frame mean 8.33 p95 8.33 ms, 120.0 fps | n 241 | track 1 seg 149 curve -61 elev 0.0 CURVE
+raster mean 0.787 p95 1.033 ms | process mean 2.180 p95 3.587 ms | frame mean 8.33 p95 8.33 ms, 120.0 fps | n 241 | track 1 seg 167 curve 0 elev -4.2
+raster mean 0.822 p95 1.046 ms | process mean 2.176 p95 3.481 ms | frame mean 8.33 p95 8.33 ms, 120.0 fps | n 241 | track 1 seg 189 curve 0 elev -0.0
+raster mean 0.817 p95 1.030 ms | process mean 2.189 p95 3.629 ms | frame mean 8.33 p95 8.33 ms, 120.0 fps | n 241 | track 1 seg 211 curve 0 elev -5.1
+raster mean 0.809 p95 0.963 ms | process mean 2.169 p95 3.491 ms | frame mean 8.33 p95 8.33 ms, 120.0 fps | n 241 | track 1 seg 233 curve 0 elev -0.0
+raster mean 0.825 p95 1.062 ms | process mean 2.174 p95 3.526 ms | frame mean 8.33 p95 8.33 ms, 120.0 fps | n 241 | track 1 seg 249 curve -74 elev -0.0 CURVE
+raster mean 0.825 p95 1.029 ms | process mean 2.212 p95 3.822 ms | frame mean 8.33 p95 8.33 ms, 120.0 fps | n 241 | track 1 seg 264 curve -28 elev -0.0 CURVE
+raster mean 0.832 p95 0.980 ms | process mean 2.170 p95 3.432 ms | frame mean 8.33 p95 8.33 ms, 120.0 fps | n 241 | track 1 seg 283 curve -46 elev -0.0 CURVE
+raster mean 0.814 p95 0.987 ms | process mean 2.212 p95 3.592 ms | frame mean 8.33 p95 8.33 ms, 120.0 fps | n 241 | track 1 seg 302 curve 47 elev -0.0 CURVE
+raster mean 0.815 p95 1.065 ms | process mean 2.097 p95 3.484 ms | frame mean 8.33 p95 8.33 ms, 120.0 fps | n 241 | track 1 seg 319 curve -74 elev -0.0 CURVE
