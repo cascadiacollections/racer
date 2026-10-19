@@ -32,6 +32,7 @@
 //! 4 m segments whose shape is stored as small integers, so a track is the
 //! same on every platform by construction, not by luck of float rounding.
 
+pub mod biome; // what a track looks like (presentation only, never simulated)
 pub mod bot; // the perfect and human-like drivers that prove a track
 pub mod car; // speed, offset, the drift state machine
 pub mod codec; // bits, Rice and gamma codes, base32, CRC-16: share codes

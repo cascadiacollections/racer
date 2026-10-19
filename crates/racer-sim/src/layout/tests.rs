@@ -2,6 +2,7 @@ use proptest::prelude::*;
 
 use super::code::{DRAFT_PREFIX, SHARE_PREFIX};
 use super::*;
+use crate::biome::Biome;
 use crate::codec::{base32, crc16, ALPHABET};
 use crate::input::Input;
 use crate::race::Race;
@@ -252,6 +253,100 @@ fn a_hand_made_code_is_pinned() {
 /// [`a_hand_made_code_is_pinned`]'s code.
 const PINNED_DRAFT: &str =
     "RD047GE70224Y86Y8QZR4290080G0ZZ0010200J87Z51Z0F0A2RY8ZJ3ZMRZJ7J5H8F0FR1FZZWAW5QR09CZ40GC1DC1V9M";
+
+/// RIDGE RUN's share code as Phase 2 shipped it, before biomes: format 1.
+const RIDGE_RUN_BEFORE_BIOMES: &str = concat!(
+    "RL04M7JH40RR948N1QH7ZZX6BJ5G5GBMHC864K4H0RJW7TCQ4B0B0QZX8EGT10MT",
+    "KN2ZZZZZ006D9TKA5238EG9ZZZZW01PG60C049H0Z8K28G0RP5S203300Z030602",
+    "4RGF8001018G87ZW210M810000R52G80QZR80G8M84P432BGEH5S2R2GN4B0B07T",
+    "0P432BG09019GZZMRD2090QZZMSQ5RC4B3C2ZT8V2R435SWSZHFX14S3YHZN4S4F",
+    "T7YMK4SZAZT2BZY26RP219EDRFZZ9KEBH8GP6R5ZZYY0ZZZZZG0ABYDVMJS0M842",
+    "0RGR88J5RWMCCWMX2H8NA5EKDR38S61GB4J94CC481GJHKKMTD6QCB2SPM9S4HJ9",
+    "0CCC8C448400101GGGHJHHKJKKKMACX6WKTFZZZZ01F202B48GY82D06982Q0HP6",
+    "M16Q0BN043C0MW0K80M40HM2404700AY8J4H4928J400AY0928J4H49280NR015G",
+    "KKKKG2M0348J4H4928J4H4928J4H800AD3G1G40680014402K01J201VJ0C2009D",
+    "C0V80CGR02YQ00YYG0F7R07G53NB8TA85MHR",
+);
+
+#[test]
+fn a_code_from_before_biomes_reads_as_a_meadow_and_repainting_keeps_its_proof() {
+    // Old codes: format 1, a meadow, the proof standing.
+    let old = Layout::from_code(RIDGE_RUN_BEFORE_BIOMES).unwrap();
+    assert_eq!(old.biome, Biome::Meadow);
+    assert_eq!(old.to_bytes().unwrap()[0], LAYOUT_FORMAT_PLAIN);
+    assert_eq!(old.to_code().unwrap(), RIDGE_RUN_BEFORE_BIOMES);
+    if crate::SIM_EPOCH == bundled::MADE_IN {
+        assert_eq!(old.standing(), Standing::Proven);
+    }
+    assert_eq!(PINNED_DRAFT, hand_made().to_code().unwrap());
+    assert_eq!(
+        Layout::from_code(PINNED_DRAFT).unwrap().biome,
+        Biome::Meadow
+    );
+    // Repainted: format 2, the same digest, the same stamp, still proven,
+    // and it reads back with its biome.
+    for b in Biome::ALL {
+        let painted = Layout {
+            biome: b,
+            ..old.clone()
+        };
+        let bytes = painted.to_bytes().unwrap();
+        let want = if b == Biome::Meadow {
+            LAYOUT_FORMAT_PLAIN
+        } else {
+            LAYOUT_FORMAT
+        };
+        assert_eq!(bytes[0], want, "{b:?}");
+        assert_eq!(painted.hash(), old.hash());
+        assert_eq!(painted.proof, old.proof);
+        assert_eq!(painted.standing(), old.standing());
+        assert_eq!(painted.ghost_key(), old.ghost_key());
+        let code = painted.to_code().unwrap();
+        assert!(code.starts_with(SHARE_PREFIX));
+        assert_eq!(Layout::from_code(&code), Ok(painted.clone()));
+        // A biome costs at most one more character.
+        assert!(code.len() <= RIDGE_RUN_BEFORE_BIOMES.len() + 1);
+    }
+}
+
+#[test]
+fn format_two_has_one_spelling_and_refuses_unknown_biomes() {
+    let l = Layout {
+        biome: Biome::Coast,
+        ..hand_made()
+    };
+    let bytes = l.to_bytes().unwrap();
+    assert_eq!(bytes[0], LAYOUT_FORMAT);
+    assert_eq!(Layout::from_bytes(&bytes), Ok(l.clone()));
+    // The biome field (Coast = 1) written as a meadow (0) or a number past
+    // the last biome (5..7): refused.
+    assert_eq!(
+        bytes,
+        [vec![LAYOUT_FORMAT], super::code::encode_body(&l, Some(1))].concat()
+    );
+    for bad in [0u32, 5, 6, 7] {
+        let bytes = [vec![LAYOUT_FORMAT], super::code::encode_body(&l, Some(bad))].concat();
+        assert_eq!(
+            Layout::from_bytes(&bytes),
+            Err(CodeError::Malformed),
+            "{bad}"
+        );
+    }
+    // A format-1 body under the format-2 byte has no biome to read.
+    let mut plain = hand_made().to_bytes().unwrap();
+    plain[0] = LAYOUT_FORMAT;
+    assert!(Layout::from_bytes(&plain).is_err());
+}
+
+#[test]
+fn a_fork_keeps_its_tracks_biome() {
+    for index in 0..crate::gen::difficulty::TRACKS {
+        let f = fork(2, index, 0);
+        assert_eq!(f.layout.biome, Biome::of_track(index));
+        let back = Layout::from_code(&f.layout.to_code().unwrap()).unwrap();
+        assert_eq!(back.biome, f.layout.biome);
+    }
+}
 
 #[test]
 fn every_single_character_typo_is_caught() {
@@ -591,8 +686,9 @@ fn layout() -> impl Strategy<Value = Layout> {
             0u32..1000,
             any::<u32>(),
         )),
+        0u8..5,
     )
-        .prop_map(|(segments, gates, objects, traffic, name, proof)| {
+        .prop_map(|(segments, gates, objects, traffic, name, proof, biome)| {
             let n = segments.len() as u32;
             let mut checkpoints: Vec<u32> = if n < 2 {
                 Vec::new()
@@ -636,6 +732,7 @@ fn layout() -> impl Strategy<Value = Layout> {
                 objects,
                 traffic,
                 proof,
+                biome: Biome::from_code(biome).unwrap(),
             }
         })
         .prop_filter("structurally sound", |l| l.structure().is_ok())

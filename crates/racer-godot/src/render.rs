@@ -1090,6 +1090,31 @@ pub(crate) mod tests {
         out
     }
 
+    /// A desktop raster micro-benchmark: `cargo test --release -p
+    /// racer-godot raster_bench -- --ignored --nocapture`. Paints a racing
+    /// frame (road, sprites, HUD, pad) at 180x360 over and over, moving
+    /// the car so every frame differs, and prints the mean per frame.
+    #[test]
+    #[ignore = "timing, run by hand in release"]
+    fn raster_bench() {
+        let t = fixtures::sweep_and_hairpin();
+        let l = Layout::new(360);
+        let art = Art::new();
+        let decor = Decor::new(&t);
+        let mut c = Canvas::new(l.w, l.h);
+        let n = 4000;
+        let mut s = scene(&t, 20.0 * SEG_LEN, 0.5, 1);
+        let start = std::time::Instant::now();
+        for i in 0..n {
+            s.car.z = 20.0 * SEG_LEN + (i % 400) as f64 * 0.5;
+            s.bg_shift = i / 4;
+            race_frame(&mut c, &l, &art, &decor, &s, Held::default());
+        }
+        let us = start.elapsed().as_secs_f64() * 1e6 / n as f64;
+        println!("raster_bench: {us:.1} us per frame ({n} frames)");
+        assert!(c.palette_only());
+    }
+
     #[test]
     #[ignore]
     fn dump_golden_frames() {

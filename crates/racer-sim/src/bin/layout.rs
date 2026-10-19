@@ -75,8 +75,9 @@ fn load(arg: &str) -> Result<(Layout, LayoutFile), String> {
 
 fn summary(l: &Layout) -> String {
     let mut s = format!(
-        "name {:?}\nsegments {} ({:.0} m to the finish), gates {:?}\nobjects {}, traffic {}\ndigest {:#018x}\nstanding {:?}",
+        "name {:?}, biome {}\nsegments {} ({:.0} m to the finish), gates {:?}\nobjects {}, traffic {}\ndigest {:#018x}\nstanding {:?}",
         l.name,
+        l.biome.name(),
         l.segments.len(),
         l.length(),
         l.checkpoints,

@@ -28,6 +28,7 @@
 //! | object count, then per object: segment step, zigzag x step, kind | γ, then γ + γ + 1 |
 //! | traffic count, then per car: zigzag steps of start, speed and lane | γ, then γ + γ + γ |
 //! | proven, then each timer, the epoch and the stamp | 1, then γ each, γ, 32 |
+//! | biome, format 2 only (1–4: not [`Biome::Meadow`]) | 3 |
 //!
 //! then zero bits to the end of the byte (γ is Elias gamma: one bit for 0,
 //! three for 1–2, five for 3–6). "Step" is the difference from the
@@ -48,6 +49,15 @@
 //! value and (but the last's, which is implied) its length − 1, all γ. Two
 //! runs side by side never share a value, so each road has one spelling.
 //!
+//! **Formats.** A [`Biome::Meadow`] layout is written in format 1
+//! ([`LAYOUT_FORMAT_PLAIN`]), with no biome field, so every code made
+//! before biomes existed is still the code of the same layout, byte for
+//! byte, and reads as a meadow. Any other biome is written in format 2
+//! ([`LAYOUT_FORMAT`]): format 1's body and three bits of biome. Each
+//! layout has one spelling: format 2 refuses a meadow. The biome is not in
+//! the layout's digest or its proof stamp, so repainting a proven layout
+//! keeps its proof.
+//!
 //! **Totality.** [`Layout::from_code`] never panics and never allocates
 //! more than a bound: text longer than [`MAX_CODE_CHARS`] is refused before
 //! anything is decoded, every count is read from a fixed-width field or
@@ -60,6 +70,7 @@ use super::{
     valid_name, Layout, Proof, AUTHORED_FLAGS, MAX_GATES, MAX_OBJECTS, MAX_SEGMENTS, MAX_TRAFFIC,
     NAME_CHARSET, NAME_MAX,
 };
+use crate::biome::Biome;
 use crate::codec::{
     best_k, frame, get_gamma, get_rice, put_gamma, put_rice, unframe, unzigzag, zigzag,
     Base32Error, BitReader, BitWriter, FrameError,
@@ -74,10 +85,18 @@ pub const DRAFT_PREFIX: &str = "RD";
 /// Either prefix, for finding a code in text.
 pub const CODE_PREFIXES: [&str; 2] = [SHARE_PREFIX, DRAFT_PREFIX];
 
-/// The format the bytes are in. A decoder refuses any other: a later format
-/// is a new number, and this decoder's job is to say it cannot read it, not
-/// to guess. Independent of `SIM_EPOCH` (DESIGN §9.4).
-pub const LAYOUT_FORMAT: u8 = 1;
+/// The newest format the bytes are in: format 1's body and a biome. A
+/// decoder reads this and [`LAYOUT_FORMAT_PLAIN`] and refuses any other: a
+/// later format is a new number, and this decoder's job is to say it
+/// cannot read it, not to guess. Independent of `SIM_EPOCH` (DESIGN §9.4).
+pub const LAYOUT_FORMAT: u8 = 2;
+
+/// Format 1, the first: no biome field. Still written for a
+/// [`Biome::Meadow`] layout, so a meadow's code is the code it always was.
+pub const LAYOUT_FORMAT_PLAIN: u8 = 1;
+
+/// Bits of the biome field (format 2).
+const BIOME_BITS: u32 = 3;
 
 /// The longest text [`Layout::from_code`] looks at. The longest code any
 /// structurally valid layout can have ([`MAX_SEGMENTS`] segments of noise
@@ -147,16 +166,21 @@ impl Layout {
     /// without the prefix, base32 or checksum.
     pub fn to_bytes(&self) -> Result<Vec<u8>, CodeError> {
         self.structure().map_err(|_| CodeError::Unencodable)?;
-        let mut bytes = vec![LAYOUT_FORMAT];
-        bytes.extend(encode_body(self));
-        Ok(bytes)
+        Ok(if self.biome == Biome::Meadow {
+            [vec![LAYOUT_FORMAT_PLAIN], encode_body(self, None)].concat()
+        } else {
+            let biome = self.biome.code() as u32;
+            [vec![LAYOUT_FORMAT], encode_body(self, Some(biome))].concat()
+        })
     }
 
     /// The layout [`Layout::to_bytes`] wrote. Total.
     pub fn from_bytes(bytes: &[u8]) -> Result<Layout, CodeError> {
         match bytes.split_first() {
             None => Err(CodeError::Malformed),
-            Some((&LAYOUT_FORMAT, body)) => decode_body(body).ok_or(CodeError::Malformed),
+            Some((&format @ (LAYOUT_FORMAT_PLAIN | LAYOUT_FORMAT), body)) => {
+                decode_body(body, format).ok_or(CodeError::Malformed)
+            }
             Some((&format, _)) => Err(CodeError::Format(format)),
         }
     }
@@ -195,7 +219,9 @@ impl Layout {
 
 // ------------------------------------------------------------------ body
 
-fn encode_body(l: &Layout) -> Vec<u8> {
+/// The packed body; `biome` is format 2's field, written as given (the
+/// tests write numbers no biome has).
+pub(super) fn encode_body(l: &Layout, biome: Option<u32>) -> Vec<u8> {
     let mut b = BitWriter::default();
     let n = l.segments.len();
     b.put(n as u32, COUNT_BITS);
@@ -252,10 +278,13 @@ fn encode_body(l: &Layout) -> Vec<u8> {
             b.put(p.stamp & 0xFFFF, 16);
         }
     }
+    if let Some(v) = biome {
+        b.put(v, BIOME_BITS);
+    }
     b.finish()
 }
 
-fn decode_body(bytes: &[u8]) -> Option<Layout> {
+fn decode_body(bytes: &[u8], format: u8) -> Option<Layout> {
     let mut r = BitReader::new(bytes);
     let n = r.get(COUNT_BITS)? as usize;
     if n == 0 || n > MAX_SEGMENTS {
@@ -362,6 +391,15 @@ fn decode_body(bytes: &[u8]) -> Option<Layout> {
             })
         }
     };
+    let biome = if format == LAYOUT_FORMAT {
+        // One spelling per layout: a meadow is format 1.
+        match Biome::from_code(r.get(BIOME_BITS)? as u8)? {
+            Biome::Meadow => return None,
+            b => b,
+        }
+    } else {
+        Biome::Meadow
+    };
     if !r.rest_is_padding() {
         return None;
     }
@@ -372,6 +410,7 @@ fn decode_body(bytes: &[u8]) -> Option<Layout> {
         objects,
         traffic,
         proof,
+        biome,
     };
     layout.structure().ok()?;
     Some(layout)
