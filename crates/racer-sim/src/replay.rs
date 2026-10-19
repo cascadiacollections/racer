@@ -28,6 +28,7 @@ use crate::input::{Input, STEER_LEVELS};
 use crate::race::{Phase, Race};
 use crate::run::{state_hash, RunPhase, RunState, Tracks};
 use crate::track::Track;
+use crate::upgrade::Loadout;
 
 /// One entry of an input log.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -234,6 +235,31 @@ impl Replay {
     pub fn final_hash(&self, tracks: &mut impl Tracks) -> Result<u64, ReplayError> {
         self.reconstruct(tracks).map(|r| state_hash(&r))
     }
+
+    /// Rebuild a custom race (DESIGN §9.6): a run of the one track `track`
+    /// (`RunState::single`, keyed by this replay's seed, the layout's
+    /// digest) driven with `loadout`, calling `observe` after every tick as
+    /// [`Replay::reconstruct_observed`] does. Its log has no forks.
+    ///
+    /// # Errors
+    ///
+    /// As [`Replay::reconstruct`]; any fork marker is unexpected.
+    pub fn reconstruct_single(
+        &self,
+        track: Arc<Track>,
+        loadout: Loadout,
+        observe: impl FnMut(&RunState),
+    ) -> Result<RunState, ReplayError> {
+        let mut o = Observed {
+            run: RunState::single(self.run_seed, track, loadout),
+            observe,
+        };
+        let at = feed(&mut o, &self.log, 0)?;
+        if at < self.log.len() {
+            return Err(ReplayError::UnexpectedFork { at });
+        }
+        Ok(o.run)
+    }
 }
 
 /// A run being reconstructed, shown to an observer after every tick.
@@ -254,8 +280,10 @@ impl<F: FnMut(&RunState)> Steppable for Observed<F> {
 
 // ------------------------------------------------------------- run files
 
-/// Version of the saved-run file, its first line's second token.
-pub const RUN_FILE: u32 = 1;
+/// Version of the saved-run file, its first line's second token: 2 for a
+/// custom race, which carries its layout; a generated run is still written
+/// as version 1, byte for byte, and both are read.
+pub const RUN_FILE: u32 = 2;
 
 /// How a saved run ended.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -280,21 +308,26 @@ impl Ending {
 
 /// A run as the game saves it for playtest analysis: the sim epoch it was
 /// played under (a replay is only exact under the same epoch), how it ended,
-/// and the replay itself.
+/// and the replay itself; for a custom race, the layout it was raced on.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunFile {
     /// `SIM_EPOCH` when it was played.
     pub epoch: u32,
     /// How it ended.
     pub ending: Ending,
-    /// Seed and log.
+    /// Seed and log. A custom race's seed is its layout's digest.
     pub replay: Replay,
+    /// A custom race's layout as it was raced: its code, carrying the
+    /// timers it raced with if it was timed (an `RL` code), none if it was
+    /// free drive (`RD`). `None` for a generated run. Replayed with
+    /// `Layout::raced_track` and [`Replay::reconstruct_single`].
+    pub layout: Option<String>,
 }
 
 /// Why a run file did not parse.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RunFileError {
-    /// The first line is not `racer-run 1`.
+    /// The first line is not `racer-run 1` or `racer-run 2`.
     Header,
     /// A required line is missing or malformed: its key.
     Field(&'static str),
@@ -302,11 +335,16 @@ pub enum RunFileError {
     Log(LogError),
 }
 
-/// The text form: four lines, `racer-run 1`, `epoch N`, `ending won|lost|quit`,
-/// `seed 0x…`, then `log` and [`encode_log`]'s tokens.
+/// The text form: `racer-run 1`, `epoch N`, `ending won|lost|quit`,
+/// `seed 0x…`, then `log` and [`encode_log`]'s tokens. A custom race is
+/// `racer-run 2`, with a `layout <code>` line between the seed and the log.
 pub fn encode_run(f: &RunFile) -> String {
+    let (version, layout) = match &f.layout {
+        None => (1, String::new()),
+        Some(code) => (RUN_FILE, format!("layout {code}\n")),
+    };
     format!(
-        "racer-run {RUN_FILE}\nepoch {}\nending {}\nseed {:#018x}\nlog {}\n",
+        "racer-run {version}\nepoch {}\nending {}\nseed {:#018x}\n{layout}log {}\n",
         f.epoch,
         f.ending.token(),
         f.replay.run_seed,
@@ -321,9 +359,11 @@ pub fn encode_run(f: &RunFile) -> String {
 /// A [`RunFileError`] for the first thing that is wrong.
 pub fn decode_run(text: &str) -> Result<RunFile, RunFileError> {
     let mut lines = text.lines();
-    if lines.next() != Some(&*format!("racer-run {RUN_FILE}")) {
-        return Err(RunFileError::Header);
-    }
+    let version = match lines.next() {
+        Some("racer-run 1") => 1,
+        Some(h) if h == format!("racer-run {RUN_FILE}") => RUN_FILE,
+        _ => return Err(RunFileError::Header),
+    };
     let mut field = |key: &'static str| -> Result<&str, RunFileError> {
         lines
             .next()
@@ -345,11 +385,22 @@ pub fn decode_run(text: &str) -> Result<RunFile, RunFileError> {
         .strip_prefix("0x")
         .and_then(|h| u64::from_str_radix(h, 16).ok())
         .ok_or(RunFileError::Field("seed"))?;
+    let layout = match version {
+        1 => None,
+        _ => {
+            let code = field("layout")?;
+            if code.is_empty() || code.contains(char::is_whitespace) {
+                return Err(RunFileError::Field("layout"));
+            }
+            Some(code.to_string())
+        }
+    };
     let log = decode_log(field("log")?).map_err(RunFileError::Log)?;
     Ok(RunFile {
         epoch,
         ending,
         replay: Replay { run_seed, log },
+        layout,
     })
 }
 
@@ -569,12 +620,13 @@ mod tests {
             epoch: crate::SIM_EPOCH,
             ending: Ending::Quit,
             replay: Replay::of(&live),
+            layout: None,
         };
         let text = encode_run(&f);
         assert!(text.starts_with("racer-run 1\nepoch "));
         assert_eq!(decode_run(&text), Ok(f));
         assert_eq!(decode_run(""), Err(RunFileError::Header));
-        assert_eq!(decode_run("racer-run 2\n"), Err(RunFileError::Header));
+        assert_eq!(decode_run("racer-run 3\n"), Err(RunFileError::Header));
         assert_eq!(
             decode_run("racer-run 1\nepoch x\n"),
             Err(RunFileError::Field("epoch"))

@@ -37,6 +37,7 @@ pub mod audio;
 pub mod builder;
 pub mod cli;
 pub mod custom;
+pub mod editor;
 pub mod engine_classes;
 pub mod font;
 pub mod frame;

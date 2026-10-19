@@ -368,10 +368,14 @@ else.
 
 ## 9. Layouts and the track editor
 
-**Status: Phase 1 built (October 2026)**: the data model, fork from a
-seed, proof, share codes, bundled courses, the `layout` host tools and the
-`--racer-layout` dev flag. No editor UI yet (Phase 2, §9.10). Salt Line's
-§13 is the model; where this section differs, §9.9 says why.
+**Status: Phase 2 built (October 2026)**: Phase 1's data model, fork
+from a seed, proof, share codes, bundled courses, `layout` host tools and
+`--racer-layout` dev flag, and Phase 2's in-game editor (§9.11): the TRACKS
+list, a top-down map and elevation strip with touch-first tools, slots and
+a draft on disk, COPY/PASTE codes, PROVE on the builder thread, FORK THIS
+TRACK, test drives, proof rules that scale with length (§9.4) and run
+files that carry the layout (§9.6). Salt Line's §13 is the model; where
+this section differs, §9.9 says why.
 
 **Owner decisions (October 2026), fixed:**
 
@@ -450,9 +454,36 @@ also uses, under fixed **custom-race rules** (`layout::rules`):
   middle of a run's 2.0–1.0 s);
 - the default effort: 16 calibration trials, then 16 verification trials
   of which 15 must keep the margin;
-- strict: the perfect-bot band (6–18 s left), the skill-gap band (8–30%)
-  and the drift-corner two-bot test all apply;
+- strict: the perfect-bot band, the skill-gap band (8–30%) and the
+  drift-corner two-bot test all apply;
+- the **perfect-bot band scaled with the length** (`perfect_band`, rules
+  version 2): the generated band, 6–18 s left, is set for a minute of
+  road (600 segments to the finish, `BAND_REF_SEGS`). Past that its top
+  edge grows in proportion to the length; below it its bottom edge
+  shrinks in proportion; the other edge stays, so the band only widens and
+  a minute-long layout meets exactly the generated band. Without it every
+  long layout failed at the top (three generated first tracks end to end,
+  7.6 km: the perfect bot keeps 21 s, the fixed band allows 18; the
+  scaled one 57);
 - noise seeds from the layout's digest, so proving is deterministic.
+
+Generated tracks never use the scaling: `solver::Rules` gained the band as
+a field, which the generated rules set to `PERFECT_LEFT`. Nothing generated
+moved: the golden runs, the batch numbers and the determinism digest
+(`0x4a5c1bcc8fc9fdfb`) are unchanged, with no `SIM_EPOCH` bump.
+
+**The race cap scales too.** A race is capped at four minutes
+(`MAX_RACE_TICKS`), which a long layout's typical driver can exceed, so
+the cap is now `race::race_cap`: four minutes, or the time to the finish
+at 16 m/s for a road longer than 3,840 m. No generated track is half that
+long (tested), so no generated race changes.
+
+**Rules are versioned in the stamp** (`PROOF_RULES` = 2). A stamp made
+under older rules reads `Stale`, not `BadStamp` (`stamp_under` tries each
+older version), and is proven again; every layout that proved under
+version 1 proves under 2 to the same timers (the band only widened; the
+timers do not depend on it), so the bundled courses were restamped with
+their timers unchanged.
 
 No repairs: a layout is what its author made. A drift corner that is not
 demanding enough fails (`DriftCorner`) rather than being tightened; the
@@ -471,7 +502,8 @@ should too, off the main thread, as it builds tracks now.
 
 Under these rules **87% of generated tracks prove** as forked (450 tracks,
 NOTES.md): every first track, 71% of the hard last ones. The rest fail
-where their generated proof leaned on an upgrade or a smaller margin.
+where their generated proof leaned on an upgrade or a smaller margin. A
+three-minute layout proves in about 130 ms on the desktop.
 
 ### 9.5 Codes
 
@@ -515,10 +547,22 @@ holds (`Stale`).
 `Game::start_custom` races one layout as a run of one track
 (`RunState::single`; nothing about generated runs, their state hash or
 their replays changes). Timed if proven; otherwise free drive, with FREE
-where the time was and the race's 240 s cap. The best finish is kept as a
+where the time was and the race's cap. The best finish is kept as a
 ghost under `(layout digest, u32::MAX, 0)` in the existing ghost file.
-RETRY COURSE races it again. Custom races are not written as run files yet
-(a run file holds a seed, not a layout).
+RETRY COURSE races it again. The TRACKS list, the editor's TEST DRIVE and
+the dev flag start them (§9.11).
+
+**Run files of custom races** (built in Phase 2): a custom race is saved
+like any run, to the same runs directory, as `run-layout-<digest>.txt`, in
+run file format 2: `racer-run 2`, then the epoch, the ending, the seed
+(the layout's digest), a `layout <code>` line and the log. The code is the
+layout as raced: an `RL` code with the timers it raced under, or `RD` for
+a free drive. `Layout::raced_track` rebuilds that track from the code
+whatever its stamp's standing, and `Replay::reconstruct_single` replays it,
+so the file replays exactly (tested, timed and free). A generated run is
+still written as format 1, byte for byte, and both are read. `playstats`
+replays custom races against the human bot on the same track with the
+custom loadout and sums them in a `custom` row of their own.
 
 `--racer-layout <code|path>` (Godot user args, `cli.rs`) starts one at
 launch; a path (`res://`, `user://` or a file) is read if it exists. The
@@ -568,20 +612,150 @@ in §9.4 and §9.5) and `bundled` (`just layout-courses`).
 | Phase | What |
 |---|---|
 | **1 (built)** | data model, fork, prove/stamp/verify, codes, bundled courses, tools, `--racer-layout` |
-| 2 | the in-game editor: a **top-down map** (the heading integrated from the curve, as trackviz draws it) over an **elevation strip**; touch-first tools (bend, straighten, hill, surface brush, gates, objects, traffic packs), also usable with keys and a pad; **fork from track** (the track just driven, from pause or results) and from a typed seed; **slots and a draft on disk** (Salt Line's layouts-file and draft rules); COPY/PASTE CODE on the clipboard; PROVE off the main thread with the gate report in words; the pseudo-3D view only for test drives; a course list for the bundled courses and slots |
+| **2 (built)** | the in-game editor (§9.11): TRACKS list, map and strip, tools, slots and draft, COPY/PASTE, PROVE and VERIFY on the builder thread, FORK THIS TRACK, FROM SEED, test drives; length-scaled proof rules (§9.4); run file format 2 (§9.6) |
 | 3 | courses of several layouts, played as a short run |
 | 4 | sharing through a relay |
 
-Open questions for Phase 2:
+Phase 1's open questions, as Phase 2 settled them (owner, October 2026):
 
-- **Bands for any length.** The perfect-bot band is absolute (6–18 s left)
-  and set for minute-long tracks; a much longer layout overshoots it.
-  Scale the band with length, or cap layouts near a minute?
-- **The custom margin and loadout.** 1.5 s and the base loadout are a first
-  choice; should a layout choose a difficulty (margin) or a loadout?
-- **Proving on a phone.** 70 ms on the desktop is a few hundred on the
-  Pixel: verify on import in the background, or trust the stamp until the
-  layout is first raced?
-- **Replays of custom races**: a run file that carries the layout code.
+- ~~**Bands for any length.**~~ The band scales with length, in the
+  custom-race rules only (§9.4).
+- ~~**The custom margin and loadout.**~~ Fixed: base loadout, 1.5 s, no
+  per-layout rules.
+- ~~**Proving on a phone.**~~ On the builder thread, never blocking: a
+  pasted proof is VERIFYING (no timer) until it comes back; listed slots
+  and courses with a stale or bad stamp are checked when TRACKS opens.
+- ~~**Replays of custom races.**~~ Run file format 2 (§9.6).
+
+Open:
+
 - **Ghosts across epochs** are dropped, like every ghost, even though the
   road is the same.
+- **Proving on the Pixel** has not been timed: the builder thread keeps
+  the UI live whatever it costs, but a three-minute layout may take a
+  second or more there. Measure before Phase 3.
+- **Traffic packs** are placed one car at a time at a run's start, at
+  18 m/s; a car meets the player well after its start (it is moving). A
+  "meet the player here" placement (solve for the start from a typical
+  pace) would read better.
+- **The map's fit.** The road is drawn north-up and fitted whole; a long,
+  thin road leaves much of the map empty. Rotating to the road's long axis
+  would use it.
+- **Names** have no word filter (Salt Line's question too), before codes
+  are shared beyond a clipboard.
+- **Phone check.** The editor is tested engine-free and by golden frames;
+  it has not been used on the Pixel yet (thumb reach, the clipboard on
+  Android, how the map reads at that size).
+
+### 9.11 The editor (Phase 2, built)
+
+`racer-godot/src/editor/`, engine-free and tested: `model.rs` (the draft,
+its runs, every edit, undo), `proof.rs` (PROVE/VERIFY and their words),
+`store.rs` (slots and draft files), `clip.rs` (codes on the clipboard),
+`view.rs` (rectangles, projections, hit tests), `draw.rs` (the pages) and
+`mod.rs` (the pages' logic and keys). `app.rs` gives it a mode,
+`Mode::Editor`.
+
+**Where it lives.** The title's **TRACKS** (or `T`) opens the TRACKS list:
+the four bundled courses, then the player's slots, each with its length
+and a badge (PROVEN, FREE, CHECKING, FAILS, NEWER). RACE races the
+selected row (timed only if proven by this build); EDIT opens it as the
+draft; DELETE empties a slot on a second tap (courses cannot be deleted);
+EDITOR opens the draft; PASTE and SEED as below. **FORK TRACK** on the
+pause menu and on the results (and TIME UP) opens the track just raced as
+the draft, its provenance (`fork:<seed>:<index>:<branch>:e<epoch>`) kept
+beside it; on a custom race it forks the layout itself. A paused run that
+is forked is saved as QUIT first. The results now show the run's seed, so
+any of its tracks can be forked later with FROM SEED.
+
+**The editing page** is the portrait buffer split as the race view is:
+the **top-down map** in the road-view area (the heading integrated from
+the curve with the sim's platform-stable trig, as trackviz draws it;
+surfaces coloured, drift corners marked, gates, finish, start, objects and
+cars beside the road), with the **elevation strip** under it; everything
+touchable is in the bottom 110 rows, the thumb zone: the run picker
+(`<` RUN 6/22 `>`), two rows of tools (BEND, HILL, WIDTH, SURF, DRIFT; OBJ,
+CARS, GATE, RUN, MENU), the tool's options, and UNDO, REDO, TEST, PROVE. A
+tap or drag on the map or the strip picks the run under the finger.
+
+**Runs.** A road is edited a run at a time: a stretch cut where the road
+changes between straight, left and right (`auto_runs`), and re-cut with
+RUN's SPLIT, JOIN, ADD (a 100 m straight), DEL and LEN-/LEN+ (20 m,
+resampling the run and moving what stands on it). Runs are the editor's,
+not the code's.
+
+**Tools.** BEND and HILL step a run's peak (5 mrad a segment; 1% of grade)
+in one canonical shape each, a smoothstep-eased arc and one sine period of
+grade (the road comes back down), so stepping up and down again is exact
+and a generated bend is snapped to that shape when first touched. WIDTH
+steps the half width by 0.5 m (3–8 m). SURF paves the run, DRIFT marks it
+NONE, HINT or MUST (required, held to the two-bot test). OBJ places post
+rows outside either edge or a rock in a lane, or clears the run; CARS
+places a car (18 m/s) in a lane at the run's start, or clears them; GATE
+adds a gate at the run's end or removes the run's gates (one always
+stays) and moves one by 20 m (the selection follows it). Every edit to the
+road drops the proof; renaming keeps it. **UNDO/REDO** keep 64 whole-draft
+snapshots; a run of presses of one stepped tool on one run is one step;
+replacing the draft (a fork, a paste, a layout opened, NEW BLANK, DISCARD)
+is a step too, so UNDO brings the old draft back.
+
+**Warnings are notes, never blocks.** What would stop a proof
+(`Layout::check`: too sharp at 480 m, a car too early...) is shown over
+the map with a count; a long road gets a note that it is slow to prove.
+Anything can be driven: TEST races the draft in the pseudo-3D view (free
+drive unless proven), and its results and pause go back to the editor
+(EDITOR instead of CONTINUE and QUIT, no FORK of the draft itself).
+
+**PROVE** sends the road to the builder thread (`Build::prove`, the same
+worker that builds the next fork's tracks) and returns at once; the badge
+reads PROVING… and the UI goes on. The answer carries a job number and is
+dropped unless it is for the road on screen (an edit meanwhile makes it
+stale). Passed: PROVEN with the timer, the perfect and the typical times;
+failed: the gate's verdict in plain words (GATE 2 IS TOO TIGHT FOR A
+TYPICAL DRIVER, TOO EASY: A PERFECT RUN HAS 25.0S LEFT, A DRIFT CORNER IS
+TOO GENTLE: SHARPEN IT OR UNMARK IT, ...). Only a proven draft races timed
+or copies as a share code.
+
+**COPY / PASTE.** COPY CODE puts the `RL` share code on the system
+clipboard when the draft is proven by this build, otherwise its `RD` draft
+code. PASTE CODE reads the clipboard (`Effect::ReadClipboard`, the
+adapter's `DisplayServer` clipboard, back through `Game::pasted`) and
+searches it for a code: wrapped across lines, quoted, indented, spaced,
+hyphenated or lower-cased, with words before or after it (`clip::paste`).
+The layout is accepted as the draft; a proof it carries is not trusted:
+VERIFYING proves it again on the worker, and it races timed only once that
+comes back (with this build's timers if they differ); a proof that fails
+leaves it untimed. A paste that holds no code says why (no code, a typo, a
+newer format, cut off).
+
+**Slots and the draft** (`store.rs`, Salt Line's §13.8 rules):
+`user://layouts/layouts.txt` is a `racer-layouts 1` header and one
+`slot <n> <code> [origin <text>]` line per slot (24 slots); lines this
+build cannot read are kept verbatim and their slots held; a code in a
+newer format keeps its slot, never saved over or deleted; a file from a
+newer build, or unreadable (too large, NULs), is never written. SAVE asks
+for a second tap to replace another layout's slot. `user://layouts/draft.txt`
+(`racer-draft 1`, the slot, the origin, the code) is rewritten after every
+edit and deleted by DISCARD; a draft from a newer build is kept and never
+written over (a note says so); a damaged one is dropped with a note. Both
+are written by the adapter through a temporary file and a rename
+(`Effect::Store`), and a failure comes back as a note (`Game::stored`); a
+launch that finds only the temporary copy reads it.
+
+**FROM SEED** is a keypad for a run seed (the number on the results), the
+track (1–5) and the road (easy or hard); FORK asks the builder thread for
+that generated track and opens it as the draft when it comes.
+
+**NAME** is a keypad of the name's 37 characters (12 at most).
+
+**Keys and a pad.** On the editing page: Left/Right (A/D, d-pad) pick the
+run, Up/Down (W/S) step the tool or move between its options, Enter (A)
+applies an option, Q/E (L1/R1) change tool, `1`–`6` pick an option, Z/Y
+(X/Y on a pad) undo and redo, T test, R prove, M/Esc/P (Start) the menu.
+The menu, slots and TRACKS move a focus with the arrows; C copies and V
+pastes from the menu; the keypads take typed letters and digits,
+Backspace and Enter. Mouse clicks are touches (`emulate_touch_from_mouse`).
+
+**DEMO** starts only from the title and ends on any input, so it never
+reaches the editor or TRACKS; a test runs a whole DEMO cycle and requires
+no layouts file, draft or clipboard effect and the editor unchanged.

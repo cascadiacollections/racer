@@ -326,6 +326,230 @@ fn layout_files_and_provenance_read_back() {
     assert_eq!(LayoutFile::parse("# nothing here\n"), None);
 }
 
+// ------------------------------------------------- run files of custom races
+
+/// Drive a custom race of `layout` with [`script`] to its end, save it as
+/// a run file the way the game does, and return the live run and the text.
+fn saved_custom(layout: &Layout, timed: bool) -> (RunState, String) {
+    use crate::replay::{encode_run, Ending, Replay, RunFile};
+    let raced = if timed {
+        layout.clone()
+    } else {
+        layout.unproven()
+    };
+    let track = Arc::new(raced.raced_track().unwrap());
+    assert_eq!(!track.allot_ticks().is_empty(), timed);
+    let mut run = RunState::single(raced.hash(), track, CUSTOM_LOADOUT);
+    let mut n = 0;
+    while run.phase() == RunPhase::Racing {
+        run.step(script(n));
+        n += 1;
+    }
+    let f = RunFile {
+        epoch: crate::SIM_EPOCH,
+        ending: if run.phase() == RunPhase::Won {
+            Ending::Won
+        } else {
+            Ending::Lost
+        },
+        replay: Replay::of(&run),
+        layout: Some(raced.to_code().unwrap()),
+    };
+    (run, encode_run(&f))
+}
+
+/// Replay a run file's custom race from its text alone.
+fn replay_custom(text: &str) -> RunState {
+    let f = crate::replay::decode_run(text).unwrap();
+    let layout = Layout::from_code(f.layout.as_deref().unwrap()).unwrap();
+    assert_eq!(layout.hash(), f.replay.run_seed, "keyed by its road");
+    let track = Arc::new(layout.raced_track().unwrap());
+    f.replay
+        .reconstruct_single(track, CUSTOM_LOADOUT, |_| {})
+        .unwrap()
+}
+
+#[test]
+fn a_custom_race_saves_as_a_v2_run_file_that_replays_exactly() {
+    let proven = bundled::layouts().remove(0);
+    for timed in [true, false] {
+        let (live, text) = saved_custom(&proven, timed);
+        assert!(text.starts_with("racer-run 2\nepoch "), "{text}");
+        let code_line = text.lines().nth(4).unwrap();
+        let prefix = if timed { "layout RL" } else { "layout RD" };
+        assert!(code_line.starts_with(prefix), "{code_line}");
+        let f = crate::replay::decode_run(&text).unwrap();
+        assert_eq!(crate::replay::encode_run(&f), text, "round trip");
+        let back = replay_custom(&text);
+        assert_eq!(state_hash(&back), state_hash(&live), "timed {timed}");
+        assert_eq!(back.results(), live.results());
+    }
+    // A proof from older rules still replays with the timers it raced
+    // with: raced_track does not ask the stamp.
+    let old = Layout::from_code(FIRST_LIGHT_RULES_1).unwrap();
+    let (live, text) = saved_custom(&old, true);
+    assert_eq!(state_hash(&replay_custom(&text)), state_hash(&live));
+}
+
+#[test]
+fn run_files_of_both_versions_read_and_damaged_layout_lines_do_not() {
+    use crate::replay::{decode_run, RunFileError};
+    let v1 = "racer-run 1\nepoch 1\nending won\nseed 0x0000000000000007\nlog v1 3:C\n";
+    let f = decode_run(v1).unwrap();
+    assert_eq!(f.layout, None);
+    assert_eq!(crate::replay::encode_run(&f), v1, "generated runs stay v1");
+    let code = hand_made().to_code().unwrap();
+    let v2 = format!(
+        "racer-run 2\nepoch 1\nending lost\nseed 0x0000000000000007\nlayout {code}\nlog v1 3:C\n"
+    );
+    assert_eq!(decode_run(&v2).unwrap().layout.as_deref(), Some(&*code));
+    for bad in [
+        "racer-run 2\nepoch 1\nending lost\nseed 0x07\nlog v1 3:C\n".to_string(),
+        "racer-run 2\nepoch 1\nending lost\nseed 0x0000000000000007\nlayout \nlog v1\n".into(),
+        "racer-run 2\nepoch 1\nending lost\nseed 0x0000000000000007\nlayout A B\nlog v1\n".into(),
+        "racer-run 2\nepoch 1\nending lost\nseed 0x0000000000000007\nlog v1 3:C\n".into(),
+    ] {
+        assert!(decode_run(&bad).is_err(), "{bad}");
+    }
+    assert_eq!(
+        decode_run("racer-run 2\nepoch 1\nending won\nseed 0x0000000000000007\nlog v1\n"),
+        Err(RunFileError::Field("layout"))
+    );
+}
+
+// ------------------------------------------------------ long layouts (§9.4)
+
+#[test]
+fn the_perfect_band_only_widens_and_is_the_generated_one_at_a_minute() {
+    use crate::gen::difficulty::PERFECT_LEFT;
+    assert_eq!(perfect_band(BAND_REF_SEGS), PERFECT_LEFT);
+    let (lo, hi) = PERFECT_LEFT;
+    for segs in [MIN_SEGMENTS as u32, 300, 599, 600, 601, 1200, 1800, 2047] {
+        let (a, b) = perfect_band(segs);
+        assert!(a <= lo && b >= hi, "{segs}: {a}..{b}");
+        assert!(a == lo || b == hi, "only one edge moves");
+    }
+    // Three minutes of road: three times the room at the top.
+    assert_eq!(perfect_band(3 * BAND_REF_SEGS), (lo, 3 * hi));
+    // Half a minute: half the room at the bottom.
+    assert_eq!(perfect_band(BAND_REF_SEGS / 2), (lo / 2, hi));
+    // The custom rules carry it; the generated rules never do.
+    assert_eq!(rules(1, 1800).perfect_left, perfect_band(1800));
+}
+
+/// `parts` end to end: each part's road up to its finish (the last one's
+/// run-out kept), every gate kept but thinned to [`MAX_GATES`], objects
+/// kept, traffic dropped.
+fn chain(parts: &[Layout]) -> Layout {
+    let mut out = Layout::default();
+    for (k, p) in parts.iter().enumerate() {
+        let off = out.segments.len() as u32;
+        let fin = *p.checkpoints.last().unwrap() as usize;
+        let end = if k + 1 == parts.len() {
+            p.segments.len()
+        } else {
+            fin
+        };
+        out.segments.extend_from_slice(&p.segments[..end]);
+        out.checkpoints
+            .extend(p.checkpoints.iter().map(|&c| c + off));
+        out.objects.extend(
+            p.objects
+                .iter()
+                .filter(|o| (o.seg as usize) < end)
+                .map(|o| Object {
+                    seg: o.seg + off,
+                    ..*o
+                }),
+        );
+    }
+    let n = out.checkpoints.len();
+    if n > MAX_GATES {
+        let last = out.checkpoints[n - 1];
+        let mut cps: Vec<u32> = (1..MAX_GATES)
+            .map(|i| out.checkpoints[i * n / MAX_GATES - 1])
+            .collect();
+        cps.push(last);
+        cps.dedup();
+        out.checkpoints = cps;
+    }
+    out
+}
+
+#[test]
+fn a_three_minute_layout_proves_under_the_scaled_band() {
+    // Three first tracks end to end: about 7.6 km, three minutes for the
+    // perfect bot. Under the generated band (18 s at most left) it fails
+    // at the top; under its own band it proves, and races timed past the
+    // old four-minute cap.
+    let l = chain(&[
+        fork(3, 0, 0).layout,
+        fork(5, 1, 0).layout,
+        fork(7, 0, 0).layout,
+    ]);
+    assert_eq!(l.check(), vec![]);
+    assert!(l.length() > 7000.0, "{}", l.length());
+    let (proven, report) = l.prove().expect("a long layout proves");
+    let (lo, hi) = crate::gen::difficulty::PERFECT_LEFT;
+    assert!(report.perfect_left > hi, "it needed the wider band");
+    let band = perfect_band(*l.checkpoints.last().unwrap());
+    assert!((band.0..=band.1).contains(&report.perfect_left));
+    assert!(report.perfect_left >= lo);
+    assert_eq!(proven.standing(), Standing::Proven);
+    let track = proven.timed_track().unwrap();
+    assert!(crate::race::race_cap(&track) > crate::race::MAX_RACE_TICKS);
+}
+
+#[test]
+fn the_race_cap_only_grows_for_roads_no_generator_makes() {
+    use crate::race::{race_cap, MAX_RACE_TICKS, RACE_CAP_SPEED};
+    for (seed, index, branch) in [(1, 0, 0), (2, 4, 1), (3, 2, 0)] {
+        let t = build(seed, index, branch, Effort::default()).track;
+        assert_eq!(race_cap(&t), MAX_RACE_TICKS);
+        assert!(
+            t.finish_z() < RACE_CAP_SPEED * 240.0 * 0.85,
+            "{}",
+            t.finish_z()
+        );
+    }
+    let long = chain(&[course(), course(), course()]).track().unwrap();
+    let cap = race_cap(&long);
+    assert!(cap > MAX_RACE_TICKS);
+    let race = Race::new(Arc::new(long), CUSTOM_LOADOUT.params());
+    assert_eq!(race.timer(), cap, "free drive gets the whole cap");
+}
+
+/// FIRST LIGHT as Phase 1 shipped it: stamped under [`PROOF_RULES`] 1.
+const FIRST_LIGHT_RULES_1: &str = concat!(
+    "RL04MSP544A9745J0REKW9ZZZZZ00HP0Z0ZH492FHFR20H7RQW1141Y1XST01Y4H",
+    "C9Y40FC824Z207P44G7P03WSTJ4A441J0FY068G2192CR7G9E7B2R1YG5GSEAJGC",
+    "Q5R70JWEP5G3ZZ9MC0JZW4GGAFZG1G4G869K21ZZM9H4RC493J7WG0ZK4CH7WR0Z",
+    "G412FSG1Z0820ZG03YCHZZZX0CH021J4SGFZ8K68GR8G681ZZ93CB0GCQ6W7ZZ1K",
+    "EBGR8P6R5ZZZ028803JC3R4K3G0GG48W044G3G14401S650G840G00QZT8008084",
+    "23ZZZKG5ZZZZW00ZZSFJR888A4G90120008CC8H2CRMK96PJJJSFZY3ZZ1DPJS9B",
+    "6PJ54RKH2080J09022H5462399YVZFZZZZR0BVZZ9ZMWQDJWPB5JJPPCSH208048",
+    "JJJ31GRE31TE3ZDZYZZZZZG06N015JW0X4GTW0F750JA06Y06J06H2R1E005F092",
+    "8J4H4928J4P00S2R02JH00A6DCFCPXN00QNW",
+);
+
+#[test]
+fn a_stamp_from_older_rules_is_stale_and_proves_again_to_the_same_timers() {
+    let old = Layout::from_code(FIRST_LIGHT_RULES_1).unwrap();
+    if crate::SIM_EPOCH == bundled::MADE_IN {
+        assert_eq!(old.standing(), Standing::Stale);
+    }
+    assert!(old.timed_track().is_none(), "not this build's proof");
+    let now = bundled::layouts().remove(0);
+    assert_eq!(old.unproven(), now.unproven(), "the same road");
+    match old.verify() {
+        Verified::Reproved(l) => {
+            assert_eq!(*l, now);
+            assert_eq!(l.proof.unwrap().allot_ticks, old.proof.unwrap().allot_ticks);
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
 // ---------------------------------------------------------------- property
 
 fn segment() -> impl Strategy<Value = Segment> {

@@ -7,10 +7,10 @@
 //! layout's digest (`Layout::ghost_key`), so the same road meets the same
 //! ghost whatever it is called.
 //!
-//! Phase 1 starts one only from the `--racer-layout` developer flag
-//! (`cli.rs`); Phase 2's editor and course list will start them from the
-//! menus. [`load`] is the engine-free part: text in, a race to start (or why
-//! not) out.
+//! The TRACKS list (bundled courses and saved slots), the editor's TEST
+//! DRIVE and the `--racer-layout` developer flag (`cli.rs`) start them.
+//! [`load`] is the engine-free part of the flag: text in, a race to start
+//! (or why not) out.
 
 use std::sync::Arc;
 
@@ -27,9 +27,27 @@ pub struct Custom {
     pub track: Arc<Track>,
     /// Whether the race has a timer: the layout is proven.
     pub timed: bool,
+    /// Where the layout came from (a fork's provenance, a course's), for
+    /// FORK THIS TRACK.
+    pub origin: Option<String>,
+    /// A test drive from the editor: its results and pause go back there.
+    pub test: bool,
 }
 
 impl Custom {
+    /// `layout` ready to race: timed only if its stamp is this build's
+    /// (`Standing::Proven`), free drive otherwise.
+    pub fn of(layout: Layout, origin: Option<String>, test: bool) -> Result<Custom, String> {
+        let (track, timed) = race_track(&layout).map_err(|p| format!("{p:?}"))?;
+        Ok(Custom {
+            layout,
+            track,
+            timed,
+            origin,
+            test,
+        })
+    }
+
     /// Where its ghost is kept.
     pub fn ghost_key(&self) -> TrackKey {
         self.layout.ghost_key()
@@ -75,6 +93,8 @@ pub fn load(text: &str, verify: bool) -> Result<(Custom, String), String> {
             layout,
             track,
             timed,
+            origin: file.origin,
+            test: false,
         },
         format!("{name}: {note}"),
     ))

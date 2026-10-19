@@ -41,6 +41,14 @@
 //! the layout is proven, its ghost kept under the layout's digest. RETRY on
 //! its results races the same layout again.
 //!
+//! The editor and the TRACKS list (DESIGN §9.11, `editor/`) are one more
+//! mode, [`Mode::Editor`]: the title's TRACKS opens it, FORK THIS TRACK on
+//! the pause menu and the results opens it on the track just raced, and a
+//! TEST DRIVE (a custom race marked `test`) comes back to it. Its files and
+//! the clipboard go out as effects ([`Effect::Store`], [`Effect::CopyText`],
+//! [`Effect::ReadClipboard`]); proving and FROM SEED's track go to the
+//! builder thread. DEMO never reaches it.
+//!
 //! Sound is decided here too (`audio`): one-shots from what changed between
 //! sim ticks, the engine and tyre loops from the car each frame, the title
 //! music from the mode. DEMO asks for none of it.
@@ -52,7 +60,7 @@ use racer_sim::bot::human::{HumanBot, HumanPlan};
 use racer_sim::bot::Driver;
 use racer_sim::ghost::{Ghost, GhostRun, GhostStore, TrackKey};
 use racer_sim::input::Input;
-use racer_sim::layout::CUSTOM_LOADOUT;
+use racer_sim::layout::{Provenance, CUSTOM_LOADOUT};
 use racer_sim::replay::{encode_run, Ending, Replay, RunFile};
 use racer_sim::rng::{mix64, substream};
 use racer_sim::run::{RunPhase, RunState, TrackCache};
@@ -62,6 +70,8 @@ use racer_sim::DT;
 use crate::audio::{loop_targets, Loops, Mixer, Sfx, Watch};
 use crate::builder::{Build, Key};
 use crate::custom::Custom;
+use crate::editor::store::StoreFile;
+use crate::editor::{Act, Editor, Out};
 use crate::input::{bind, pressed, Controls, Event, Intents, SteerRamp};
 use crate::layout::{buffer_size, inset_rows, Layout, H_MIN};
 use crate::render::{Decor, Held};
@@ -96,6 +106,8 @@ pub enum Mode {
     Fork,
     /// The run is over: won or out of time.
     Results,
+    /// The TRACKS list and the editor (`editor`).
+    Editor,
 }
 
 /// What the engine must do for the core.
@@ -124,6 +136,16 @@ pub enum Effect {
     /// ([`GhostStore::encode`]) as [`GHOSTS_FILE`] in the user data
     /// directory. Never for DEMO.
     SaveGhosts { text: String },
+    /// Write a layouts file (`user://layouts/<file>`) atomically, or delete
+    /// it (`None`), then report with [`Game::stored`]. Never for DEMO.
+    Store {
+        file: StoreFile,
+        text: Option<String>,
+    },
+    /// Put this text on the system clipboard.
+    CopyText(String),
+    /// Read the system clipboard and hand it to [`Game::pasted`].
+    ReadClipboard,
 }
 
 /// The DEMO driver.
@@ -195,6 +217,8 @@ pub struct Game {
     attempt: u32,
     /// The layout being raced, in a custom race.
     pub custom: Option<Custom>,
+    /// The TRACKS list and the editor.
+    pub editor: Editor,
 }
 
 impl Game {
@@ -237,7 +261,96 @@ impl Game {
             gates_seen: 0,
             attempt: 0,
             custom: None,
+            editor: Editor::new(),
         }
+    }
+
+    /// Read the layouts files at launch (`None` where there is none):
+    /// the slots and the draft (`editor::store`).
+    pub fn load_layouts(&mut self, slots: Option<&str>, draft: Option<&str>) {
+        self.editor.load(slots, draft);
+    }
+
+    /// A layouts file was written (`ok`) or not, after [`Effect::Store`].
+    pub fn stored(&mut self, file: StoreFile, ok: bool) {
+        if !ok {
+            self.editor.sticky = Some(match file {
+                StoreFile::Slots => "COULD NOT SAVE THE SLOTS".into(),
+                StoreFile::Draft => "COULD NOT KEEP THE DRAFT".into(),
+            });
+            self.fx.push(Effect::Redraw);
+        }
+    }
+
+    /// The clipboard's text, after [`Effect::ReadClipboard`].
+    pub fn pasted(&mut self, text: &str) -> Vec<Effect> {
+        if self.mode == Mode::Editor && self.demo.is_none() {
+            let out = self.editor.pasted(text, self.builder.as_mut());
+            self.carry_out(out);
+        }
+        self.fx.push(Effect::Redraw);
+        std::mem::take(&mut self.fx)
+    }
+
+    /// Do what the editor asked.
+    fn carry_out(&mut self, out: Vec<Out>) {
+        for o in out {
+            match o {
+                Out::Store(file, text) => self.fx.push(Effect::Store { file, text }),
+                Out::Copy(text) => self.fx.push(Effect::CopyText(text)),
+                Out::Paste => self.fx.push(Effect::ReadClipboard),
+                Out::Race(c) => self.start_custom(*c),
+                Out::Title => self.go_to_title(),
+                Out::Build(key) => {
+                    if let Some(t) = self.track(key) {
+                        let more = self.editor.forked(key, &t, self.builder.as_mut());
+                        self.carry_out(more);
+                    } else {
+                        self.request(key);
+                    }
+                }
+                Out::Click => self.sfx.push(Sfx::Click),
+            }
+        }
+        self.fx.push(Effect::Redraw);
+    }
+
+    /// Open the TRACKS list.
+    fn open_tracks(&mut self) {
+        self.go_to_title();
+        self.mode = Mode::Editor;
+        self.editor.open_tracks(self.builder.as_mut());
+    }
+
+    /// FORK THIS TRACK: the track on screen (or the layout raced) goes to
+    /// the editor as the draft.
+    fn fork_this(&mut self) {
+        let Some(run) = &self.run else { return };
+        let track = run.race().track().clone();
+        let (seed, index, branch) = (run.run_seed(), run.index(), run.branch());
+        let out = match self.custom.clone() {
+            Some(c) => self.editor.fork_layout(&c, self.builder.as_mut()),
+            None => {
+                let origin = Provenance {
+                    run_seed: seed,
+                    index,
+                    branch,
+                    epoch: racer_sim::SIM_EPOCH,
+                };
+                self.editor
+                    .fork_track(&track, Some(origin.to_string()), self.builder.as_mut())
+            }
+        };
+        self.go_to_title();
+        self.mode = Mode::Editor;
+        self.carry_out(out);
+    }
+
+    /// Back to the editor after a test drive.
+    fn back_to_editor(&mut self) {
+        self.go_to_title();
+        self.mode = Mode::Editor;
+        self.editor.open_edit();
     }
 
     /// Read the stored ghosts ([`GHOSTS_FILE`]'s text). Ghosts from another
@@ -293,6 +406,7 @@ impl Game {
             Mode::Title | Mode::Building => true,
             Mode::Fork => self.demo.is_some() || !self.fork_ready(),
             Mode::Results => false,
+            Mode::Editor => self.editor.animating(),
         }
     }
 
@@ -344,7 +458,7 @@ impl Game {
         if let Some(l) = self.mixer.update(delta, target) {
             self.fx.push(Effect::Loops(l));
         }
-        let music = !quiet && matches!(self.mode, Mode::Title | Mode::Building);
+        let music = !quiet && matches!(self.mode, Mode::Title | Mode::Building | Mode::Editor);
         if music != self.music {
             self.music = music;
             self.fx.push(Effect::Music(music));
@@ -361,10 +475,22 @@ impl Game {
             self.fx.push(Effect::Buffer { w, h });
             self.fx.push(Effect::Redraw);
         }
+        self.editor.tick(self.clock);
         for (key, track) in self.builder.poll() {
-            self.cache.insert(key.0, key.1, key.2, track);
+            self.cache.insert(key.0, key.1, key.2, track.clone());
             self.ready.insert(key);
             self.fx.push(Effect::Redraw);
+            // FROM SEED's track: the draft, kept on disk (the editor may
+            // have been left meanwhile; it opens on the fork next time).
+            if self.editor.pending_fork == Some(key) {
+                let out = self.editor.forked(key, &track, self.builder.as_mut());
+                self.carry_out(out);
+            }
+        }
+        let proofs = self.builder.proofs();
+        if !proofs.is_empty() {
+            let out = self.editor.proofs(proofs);
+            self.carry_out(out);
         }
         let mut back = false;
         for e in &i.events {
@@ -403,9 +529,16 @@ impl Game {
         }
         match self.mode {
             Mode::Title => {
+                let tracks = i
+                    .events
+                    .iter()
+                    .any(|e| matches!(e, Event::Key(crate::input::Key::Char(b'T'))));
                 if confirm || self.touch.pressed(Action::Start) {
                     self.sfx.push(Sfx::Click);
                     self.start(i.entropy, false);
+                } else if self.touch.pressed(Action::Tracks) || tracks {
+                    self.sfx.push(Sfx::Click);
+                    self.open_tracks();
                 } else if self.touch.pressed(Action::Demo) {
                     self.start(i.entropy, true);
                 }
@@ -421,6 +554,43 @@ impl Game {
             Mode::Racing => self.racing(delta, i, confirm, pause),
             Mode::Fork => self.forking(delta, i, confirm),
             Mode::Results => self.results(i, confirm),
+            Mode::Editor => self.editing(i, back),
+        }
+    }
+
+    /// A frame in the editor: its buttons, keys, pad and the map's touches.
+    fn editing(&mut self, i: &Intents, back: bool) {
+        let mut acts: Vec<Act> = self
+            .touch
+            .presses()
+            .iter()
+            .filter_map(|a| match a {
+                Action::Edit(a) if !matches!(a, Act::Map | Act::Strip) => Some(*a),
+                _ => None,
+            })
+            .collect();
+        for e in &i.events {
+            match *e {
+                Event::FingerDown { index, x, y } | Event::FingerMoved { index, x, y } => {
+                    if let Some(Action::Edit(on @ (Act::Map | Act::Strip))) =
+                        self.touch.finger(index)
+                    {
+                        self.editor.touch(on, x, y, &self.layout);
+                    }
+                }
+                Event::Key(_) | Event::Pad(_) => acts.extend(self.editor.key(e)),
+                _ => {}
+            }
+        }
+        if back {
+            acts.push(Act::Back);
+        }
+        for a in acts {
+            if self.mode != Mode::Editor {
+                break;
+            }
+            let out = self.editor.act(a, self.builder.as_mut(), self.clock);
+            self.carry_out(out);
         }
     }
 
@@ -439,17 +609,29 @@ impl Game {
         std::mem::take(&mut self.fx)
     }
 
+    /// Whether the results and pause offer FORK THIS TRACK: a player's race
+    /// (not DEMO's), not a test drive of the draft itself.
+    pub fn can_fork(&self) -> bool {
+        self.demo.is_none() && !self.custom.as_ref().is_some_and(|c| c.test)
+    }
+
     fn results(&mut self, i: &Intents, confirm: bool) {
         let any = |keys: &[_], pads: &[_]| i.events.iter().any(|e| pressed(e, keys, pads));
         let sel = self.results_sel;
+        let top = if self.can_fork() { 2 } else { 1 };
         if any(bind::MENU_UP, bind::PAD_UP) {
-            self.results_sel = 1;
+            self.results_sel = (self.results_sel + 1).min(top);
         }
         if any(bind::MENU_DOWN, bind::PAD_DOWN) {
-            self.results_sel = 0;
+            self.results_sel = self.results_sel.saturating_sub(1);
         }
         if self.results_sel != sel {
             self.sfx.push(Sfx::Click);
+        }
+        let fork = self.touch.pressed(Action::ForkTrack) || (confirm && self.results_sel == 2);
+        if fork && self.can_fork() {
+            self.fork_this();
+            return;
         }
         let retry = self.touch.pressed(Action::Retry) || (confirm && self.results_sel == 1);
         if retry && self.demo.is_none() {
@@ -465,7 +647,11 @@ impl Game {
             self.attempt = attempt;
         } else if confirm || self.touch.pressed(Action::Continue) {
             self.sfx.push(Sfx::Click);
-            self.go_to_title();
+            if self.custom.as_ref().is_some_and(|c| c.test) {
+                self.back_to_editor();
+            } else {
+                self.go_to_title();
+            }
         }
     }
 
@@ -473,6 +659,7 @@ impl Game {
         match self.mode {
             Mode::Title => self.fx.push(Effect::Quit),
             Mode::Racing => self.set_paused(!self.paused),
+            Mode::Editor => {}
             _ => self.go_to_title(),
         }
     }
@@ -487,19 +674,34 @@ impl Game {
 
     /// Queue the current run for saving, unless DEMO drove it.
     fn save_run(&mut self, ending: Ending) {
-        let (Some(run), None, None) = (&self.run, &self.demo, &self.custom) else {
-            // A custom race's replay needs its layout, which a run file
-            // does not hold yet (DESIGN §9.8).
+        let (Some(run), None) = (&self.run, &self.demo) else {
             return;
+        };
+        // A custom race carries its layout as raced: with the proof whose
+        // timers it raced under, or none for a free drive (a version 2 run
+        // file, DESIGN §9.6).
+        let layout = self.custom.as_ref().and_then(|c| {
+            let raced = if c.timed {
+                c.layout.clone()
+            } else {
+                c.layout.unproven()
+            };
+            raced.to_code().ok()
+        });
+        let kind = if layout.is_some() {
+            "run-layout"
+        } else {
+            "run"
         };
         let f = RunFile {
             epoch: racer_sim::SIM_EPOCH,
             ending,
             replay: Replay::of(run),
+            layout,
         };
         let name = match self.attempt {
-            0 => format!("run-{:016x}.txt", f.replay.run_seed),
-            n => format!("run-{:016x}-{n}.txt", f.replay.run_seed),
+            0 => format!("{kind}-{:016x}.txt", f.replay.run_seed),
+            n => format!("{kind}-{:016x}-{n}.txt", f.replay.run_seed),
         };
         self.fx.push(Effect::SaveRun {
             name,
@@ -641,7 +843,14 @@ impl Game {
             } else if self.touch.pressed(Action::Quit) {
                 self.sfx.push(Sfx::Click);
                 self.save_run(Ending::Quit);
-                self.go_to_title();
+                if self.custom.as_ref().is_some_and(|c| c.test) {
+                    self.back_to_editor();
+                } else {
+                    self.go_to_title();
+                }
+            } else if self.touch.pressed(Action::ForkTrack) && self.can_fork() {
+                self.save_run(Ending::Quit);
+                self.fork_this();
             }
             return;
         }
@@ -1351,13 +1560,34 @@ mod tests {
             .track()
             .allot_ticks()
             .is_empty());
+        let mut fx = Vec::new();
         for _ in 0..2000 {
-            frame(&mut g, vec![], vec![]);
+            fx.extend(frame(&mut g, vec![], vec![]));
             if g.mode != Mode::Racing {
                 break;
             }
         }
         assert_eq!(g.mode, Mode::Results, "finished the strip");
+        // Saved as a version 2 run file that replays from its layout alone.
+        let saved: Vec<_> = fx
+            .iter()
+            .filter_map(|e| match e {
+                Effect::SaveRun { name, text } => Some((name.clone(), text.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].0, format!("run-layout-{:016x}.txt", key.0));
+        let f = racer_sim::replay::decode_run(&saved[0].1).unwrap();
+        let l = Layout::from_code(f.layout.as_deref().unwrap()).unwrap();
+        let back = f
+            .replay
+            .reconstruct_single(Arc::new(l.raced_track().unwrap()), CUSTOM_LOADOUT, |_| {})
+            .unwrap();
+        assert_eq!(
+            racer_sim::run::state_hash(&back),
+            racer_sim::run::state_hash(g.run.as_ref().unwrap())
+        );
         assert_eq!(g.run.as_ref().unwrap().phase(), RunPhase::Won);
         assert!(g.ghosts().get(key).is_some(), "kept under the layout's key");
         // RETRY COURSE races it again, with its ghost.

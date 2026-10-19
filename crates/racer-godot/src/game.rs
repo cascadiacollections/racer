@@ -27,6 +27,7 @@ use godot::classes::{
     Node2D, Os, ProjectSettings, ResourceLoader, Time,
 };
 use godot::global::{JoyAxis, JoyButton, Key};
+use godot::obj::EngineEnum;
 use godot::prelude::*;
 
 use crate::app::{Effect, Game};
@@ -174,6 +175,9 @@ impl INode2D for Racer {
             self.g.load_ghosts(&text);
             godot_print!("racer: {} ghosts loaded", self.g.ghosts().len());
         }
+        let slots = load_layouts_file(crate::editor::store::SLOTS_FILE);
+        let draft = load_layouts_file(crate::editor::store::DRAFT_FILE);
+        self.g.load_layouts(slots.as_deref(), draft.as_deref());
         self.setup_audio();
         self.dev_flags();
         godot_print!(
@@ -225,6 +229,13 @@ impl INode2D for Racer {
                     let code = key.get_keycode();
                     if let Some((k, _)) = KEYS.iter().find(|(_, g)| *g == code) {
                         self.events.push(Event::Key(*k));
+                    }
+                    // Letters and digits are also typed: names, seeds and
+                    // the editor's shortcuts.
+                    if let Some(c) = typed(code) {
+                        self.events.push(Event::Key(input::Key::Char(c)));
+                    } else if code == Key::BACKSPACE {
+                        self.events.push(Event::Key(input::Key::Backspace));
                     }
                 }
                 return;
@@ -288,6 +299,66 @@ impl INode2D for Racer {
             _ => {}
         }
     }
+}
+
+/// The character a key types, for [`input::Key::Char`]: `A`-`Z`, `0`-`9`.
+fn typed(code: Key) -> Option<u8> {
+    let o = code.ord();
+    if (Key::A.ord()..=Key::Z.ord()).contains(&o) {
+        Some(b'A' + (o - Key::A.ord()) as u8)
+    } else if (Key::KEY_0.ord()..=Key::KEY_9.ord()).contains(&o) {
+        Some(b'0' + (o - Key::KEY_0.ord()) as u8)
+    } else if (Key::KP_0.ord()..=Key::KP_9.ord()).contains(&o) {
+        Some(b'0' + (o - Key::KP_0.ord()) as u8)
+    } else {
+        None
+    }
+}
+
+/// `user://layouts/<name>` as a filesystem path: the slots file and the
+/// draft (DESIGN §9.11), app-private like the ghosts.
+fn layouts_path(name: &str) -> std::path::PathBuf {
+    let dir = ProjectSettings::singleton()
+        .globalize_path("user://layouts")
+        .to_string();
+    std::path::Path::new(&dir).join(name)
+}
+
+/// Read a layouts file, if there is one. A file being replaced when the
+/// app died (only the temporary copy is whole) is read from that copy.
+fn load_layouts_file(name: &str) -> Option<String> {
+    let path = layouts_path(name);
+    std::fs::read_to_string(&path)
+        .ok()
+        .or_else(|| std::fs::read_to_string(path.with_extension("tmp")).ok())
+}
+
+/// Write (or with `None`, delete) a layouts file: to a temporary file, then
+/// renamed over the old one, so a crash mid-write leaves the last good
+/// file. Returns whether it worked; a failure is logged.
+fn store_layouts_file(name: &str, text: Option<&str>) -> bool {
+    let path = layouts_path(name);
+    let done = match text {
+        Some(text) => {
+            let tmp = path.with_extension("tmp");
+            path.parent()
+                .map_or(Ok(()), std::fs::create_dir_all)
+                .and_then(|()| std::fs::write(&tmp, text))
+                .and_then(|()| std::fs::rename(&tmp, &path))
+        }
+        None => {
+            // A stale temporary copy would be read back as the file.
+            let _ = std::fs::remove_file(path.with_extension("tmp"));
+            match std::fs::remove_file(&path) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+                _ => Ok(()),
+            }
+        }
+    };
+    if let Err(e) = &done {
+        godot_warn!("racer: could not write {}: {e}", path.display());
+    }
+    done.is_ok()
 }
 
 /// `user://ghosts/ghosts.txt` as a filesystem path: the app's private data
@@ -525,6 +596,16 @@ impl Racer {
                 Effect::Quit => self.base().get_tree().quit(),
                 Effect::SaveRun { name, text } => self.save_run(&name, &text),
                 Effect::SaveGhosts { text } => save_ghosts(&text),
+                Effect::Store { file, text } => {
+                    let ok = store_layouts_file(file.name(), text.as_deref());
+                    self.g.stored(file, ok);
+                }
+                Effect::CopyText(text) => DisplayServer::singleton().clipboard_set(&text),
+                Effect::ReadClipboard => {
+                    let text = DisplayServer::singleton().clipboard_get().to_string();
+                    let fx = self.g.pasted(&text);
+                    self.apply(fx);
+                }
                 Effect::Sound(sfx) => {
                     if let Some(p) = self
                         .audio

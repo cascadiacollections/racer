@@ -31,8 +31,22 @@ use crate::traffic::{CAR_HALF_WIDTH, CAR_LEN};
 
 /// Hard cap on a race's length, ticks: four minutes. Only an untimed race
 /// (a track not yet calibrated, DESIGN §2.4) can get near it; a timed race
-/// ends on its timer long before.
+/// ends on its timer long before. A track longer than
+/// [`RACE_CAP_SPEED`] × four minutes gets longer ([`race_cap`]).
 pub const MAX_RACE_TICKS: u32 = 240 * crate::TICKS_PER_SEC;
+
+/// The average speed, m/s, the race cap allows a long track ([`race_cap`]):
+/// far below any driver's, so the cap never ends a race that is moving.
+pub const RACE_CAP_SPEED: f64 = 16.0;
+
+/// The hard cap on a race on `track`, ticks: [`MAX_RACE_TICKS`], or for a
+/// track whose finish is more than 3,840 m away (a long layout, DESIGN
+/// §9.4; no generated track is that long) the time to the finish at
+/// [`RACE_CAP_SPEED`].
+pub fn race_cap(track: &Track) -> u32 {
+    let long = (track.finish_z() / RACE_CAP_SPEED * crate::TICKS_PER_SEC as f64).ceil() as u32;
+    MAX_RACE_TICKS.max(long)
+}
 
 /// Where the race is.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -65,19 +79,22 @@ pub struct Race {
     log: Vec<Event>,
     input: Input,
     last_change: u32,
+    /// [`race_cap`] of the track, kept: derived, never hashed.
+    cap: u32,
 }
 
 impl Race {
     /// A race on `track` with a car of `params`, on the start line.
     ///
     /// An uncalibrated track (no allotments) races untimed, capped at
-    /// [`MAX_RACE_TICKS`]: that is how calibration measures it.
+    /// [`race_cap`]: that is how calibration measures it.
     pub fn new(track: Arc<Track>, params: CarParams) -> Self {
         let timer = track
             .allot_ticks()
             .first()
             .copied()
-            .unwrap_or(MAX_RACE_TICKS);
+            .unwrap_or_else(|| race_cap(&track));
+        let cap = race_cap(&track);
         Race {
             track,
             params,
@@ -92,6 +109,7 @@ impl Race {
             log: Vec::new(),
             input: Input::NEUTRAL,
             last_change: 0,
+            cap,
         }
     }
 
@@ -115,7 +133,7 @@ impl Race {
         self.collide();
         self.timer -= 1;
         self.cross_gates();
-        if self.phase == Phase::Racing && (self.timer == 0 || self.tick >= MAX_RACE_TICKS) {
+        if self.phase == Phase::Racing && (self.timer == 0 || self.tick >= self.cap) {
             self.phase = Phase::TimeUp;
         }
     }

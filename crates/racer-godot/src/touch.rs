@@ -35,6 +35,12 @@ pub enum Action {
     Quit,
     Continue,
     Retry,
+    /// The title's TRACKS: the courses, the slots and the editor.
+    Tracks,
+    /// FORK THIS TRACK (pause and results): edit the track just raced.
+    ForkTrack,
+    /// A button on an editor page (DESIGN §9.11).
+    Edit(crate::editor::Act),
 }
 
 impl Action {
@@ -102,6 +108,11 @@ impl TouchPad {
         self.pressed = std::mem::take(&mut self.went_down);
     }
 
+    /// Every press this frame, in order.
+    pub fn presses(&self) -> &[Action] {
+        &self.pressed
+    }
+
     /// Whether `a` was pressed this frame.
     pub fn pressed(&self, a: Action) -> bool {
         self.pressed.contains(&a)
@@ -115,6 +126,11 @@ impl TouchPad {
     /// Whether any finger is down.
     pub fn active(&self) -> bool {
         !self.fingers.is_empty()
+    }
+
+    /// What finger `index` is holding, if it is down on a button.
+    pub fn finger(&self, index: i32) -> Option<Action> {
+        self.fingers.iter().find(|(i, _)| *i == index)?.1
     }
 }
 
