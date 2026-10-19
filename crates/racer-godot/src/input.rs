@@ -125,6 +125,10 @@ pub mod bind {
     pub const PAD_PAUSE: &[Pad] = &[Pad::Start, Pad::Back];
     pub const MENU_LEFT: &[Key] = &[Key::Left, Key::A];
     pub const MENU_RIGHT: &[Key] = &[Key::Right, Key::D];
+    pub const MENU_UP: &[Key] = &[Key::Up, Key::W];
+    pub const MENU_DOWN: &[Key] = &[Key::Down, Key::S];
+    pub const PAD_UP: &[Pad] = &[Pad::Up];
+    pub const PAD_DOWN: &[Pad] = &[Pad::Down];
 }
 
 /// What the player is holding, from every device but touch.

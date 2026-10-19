@@ -170,6 +170,10 @@ impl INode2D for Racer {
 
     fn ready(&mut self) {
         self.project_cap = Engine::singleton().get_max_fps();
+        if let Some(text) = load_ghosts() {
+            self.g.load_ghosts(&text);
+            godot_print!("racer: {} ghosts loaded", self.g.ghosts().len());
+        }
         self.setup_audio();
         godot_print!(
             "racer: sim epoch {} ({:#018x})",
@@ -282,6 +286,37 @@ impl INode2D for Racer {
             | CanvasItemNotification::APPLICATION_RESUMED => self.redraw.mark(),
             _ => {}
         }
+    }
+}
+
+/// `user://ghosts/ghosts.txt` as a filesystem path: the app's private data
+/// (the best per track is the player's, not playtest data, so it stays out
+/// of the runs directory).
+fn ghosts_path() -> std::path::PathBuf {
+    let dir = ProjectSettings::singleton()
+        .globalize_path("user://ghosts")
+        .to_string();
+    std::path::Path::new(&dir).join(crate::app::GHOSTS_FILE)
+}
+
+/// The stored ghosts' text, if there is a file.
+fn load_ghosts() -> Option<String> {
+    std::fs::read_to_string(ghosts_path()).ok()
+}
+
+/// Write the ghosts' text: to a temporary file, then renamed over the old
+/// one, so a crash mid-write leaves the last good file. A failure is
+/// logged, never fatal.
+fn save_ghosts(text: &str) {
+    let path = ghosts_path();
+    let tmp = path.with_extension("tmp");
+    let written = path
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| std::fs::write(&tmp, text))
+        .and_then(|()| std::fs::rename(&tmp, &path));
+    if let Err(e) = written {
+        godot_warn!("racer: could not save {}: {e}", path.display());
     }
 }
 
@@ -459,6 +494,7 @@ impl Racer {
                 Effect::KeepScreenOn(on) => DisplayServer::singleton().screen_set_keep_on(on),
                 Effect::Quit => self.base().get_tree().quit(),
                 Effect::SaveRun { name, text } => self.save_run(&name, &text),
+                Effect::SaveGhosts { text } => save_ghosts(&text),
                 Effect::Sound(sfx) => {
                     if let Some(p) = self
                         .audio

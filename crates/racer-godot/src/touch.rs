@@ -34,6 +34,7 @@ pub enum Action {
     Resume,
     Quit,
     Continue,
+    Retry,
 }
 
 impl Action {
