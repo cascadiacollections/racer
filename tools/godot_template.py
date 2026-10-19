@@ -280,7 +280,7 @@ def prepare_android(require: bool) -> None:
                 fail("Android source template contains an unsafe path")
         archive.extractall(ANDROID_BUILD)
     (ANDROID_BUILD / ".gdignore").touch()
-    (ANDROID_BUILD.parent / ".build_version").write_text(f"{GODOT_VERSION}.stable\n")
+    (ANDROID_BUILD.parent / ".build_version").write_text(os.environ.get("GODOT_BUILD_VERSION", f"{GODOT_VERSION}.stable") + "\n")
     (ANDROID_BUILD / "gradlew").chmod(0o755)
     print(f"Android Gradle template unpacked: {ANDROID_BUILD}")
     select_engine(require)

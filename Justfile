@@ -79,7 +79,7 @@ android_bin := android_ndk / "toolchains/llvm/prebuilt" / android_host / "bin"
 adb := android_sdk / "platform-tools/adb"
 java_home := env("JAVA_HOME", home_directory() / ".local/share/mise/installs/java/temurin-21.0.12+101.0.LTS")
 keystore := env("GODOT_ANDROID_KEYSTORE_DEBUG_PATH", if path_exists(home_directory() / ".android/debug.keystore") == "true" { home_directory() / ".android/debug.keystore" } else { home_directory() / ".local/share/godot/keystores/debug.keystore" })
-package := "com.cascadiacollections.racer"
+package := "com.cascadiacollections.racer.eval48"
 
 # Cross-compile the GDExtension for Android (arm64) and strip its debug
 # info. `just android-lib release profiling` builds the timing build.
