@@ -21,7 +21,7 @@ use crate::palette::*;
 use crate::raster::{dither_on, Sprite};
 
 /// The red body: shadowed, mid, lit.
-const BODY: &[u8] = &[INK, RED_DK, RED_DK, RED, RED, RED];
+const BODY: &[u8] = &[INK, RED_DK, RED_DK, RED_DK, RED, RED, RED];
 /// Glass: dark tint with a pale sky reflection on the lit faces.
 const GLASS: &[u8] = &[INK, ASPHALT_DK, ASPHALT_LT, ASPHALT_LT, ICE];
 /// Tyres and trim.

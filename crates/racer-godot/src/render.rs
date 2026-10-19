@@ -490,7 +490,7 @@ pub fn road(c: &mut Canvas, l: &Layout, art: &Art, decor: &Decor, s: &RaceScene)
     for t in s.track.traffic() {
         stand(
             &mut things,
-            &art.traffic,
+            art.traffic_for(t),
             v.place(t.z_at(s.tick), t.x()),
             false,
         );

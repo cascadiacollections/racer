@@ -161,7 +161,7 @@ pub struct View {
 
 /// Where the light comes from, in view space (`x` right, `y` away from
 /// the camera, `h` up): high, from the left, a little behind the camera.
-const LIGHT: V3 = v3(-0.45, -0.6, 0.66);
+const LIGHT: V3 = v3(-0.5, -0.35, 0.8);
 
 impl View {
     /// A point turned by the yaw: still metres, `y` now along the view.

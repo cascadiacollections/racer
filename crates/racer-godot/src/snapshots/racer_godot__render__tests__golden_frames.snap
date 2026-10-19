@@ -2,14 +2,14 @@
 source: crates/racer-godot/src/render.rs
 expression: out
 ---
-sweep_mid_curve: 0x123811474a32c926
-hairpin_entry: 0x7d34aaf66558a454
-crest_climbing: 0x65af5b590ed7af7a
-crest_over: 0x91f9d315f185963a
-hazards: 0xd3242fb2cb6ea818
-drift_corner_signed: 0x170c43bc78f239ee
-ghost_ahead: 0xddf3069aedf4efa2
-biome_coast: 0x4487a89c5d8a0f16
-biome_alpine: 0xca6d305708e5f78a
-biome_desert: 0x51d4e144b6aa25ee
-biome_night: 0x81be1a8b4d4b8406
+sweep_mid_curve: 0x43b7b184813b87e2
+hairpin_entry: 0x5b3041135b3b24f2
+crest_climbing: 0xbcd9f12457a3ea7a
+crest_over: 0xc5cec97d53e7abd2
+hazards: 0xb8150a652108d138
+drift_corner_signed: 0x78f9e8df29555aa4
+ghost_ahead: 0x2dd4b28f9315af5e
+biome_coast: 0x1f6d4543fa2981e8
+biome_alpine: 0x454a4fa79a203af4
+biome_desert: 0x00a0effb5ad532dc
+biome_night: 0x57e92d5982f52bf4

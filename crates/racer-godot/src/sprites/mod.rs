@@ -17,6 +17,7 @@
 
 pub mod car;
 pub mod solid;
+pub mod traffic;
 
 use racer_sim::biome::Biome;
 
@@ -273,64 +274,6 @@ fn chevron(u: f64, v: f64, _w: i32, _h: i32) -> u8 {
     }
 }
 
-/// A car's colours.
-#[derive(Clone, Copy)]
-struct Livery {
-    body: u8,
-    shade: u8,
-    lights: u8,
-}
-
-/// A car from behind in `livery`. `skew` is
-/// how many pixels the roof leans over (negative left) and `side` shows a
-/// strip of the car's flank on the left (-1) or right (1): a drift.
-fn car(u: f64, v: f64, w: i32, livery: Livery, skew: f64, side: i32) -> u8 {
-    let Livery {
-        body,
-        shade,
-        lights,
-    } = livery;
-    // Lean the top: shift u by up to `skew` pixels at v = 0.
-    let u = u - skew * (1.0 - v) / w as f64;
-    let (l, r) = (0.04, 0.96);
-    if v > 0.86 {
-        return if u > 0.02 && u < 0.98 { INK } else { C };
-    }
-    if v > 0.66 && (u < 0.17 || u > 0.83) && u > l && u < r {
-        return INK; // tyres
-    }
-    if v >= 0.34 && u > l && u < r {
-        let flank = match side {
-            -1 => u < 0.16,
-            1 => u > 0.84,
-            _ => false,
-        };
-        if flank {
-            return shade;
-        }
-        if v > 0.44 && v < 0.56 && (u < 0.22 || u > 0.78) {
-            return lights;
-        }
-        return if v > 0.74 { shade } else { body };
-    }
-    // Cabin: narrower towards the roof.
-    let inset = 0.17 + 0.12 * (0.34 - v) / 0.34;
-    if v < 0.34 && u > inset && u < 1.0 - inset {
-        return if v > 0.1 && u > inset + 0.06 && u < 1.0 - inset - 0.06 {
-            ASPHALT_LT
-        } else {
-            body
-        };
-    }
-    C
-}
-
-const TRAFFIC: Livery = Livery {
-    body: WATER,
-    shade: INK,
-    lights: RED,
-};
-
 /// The camera's angle down at something `scale` pixels a metre away,
 /// radians: steep close to the camera, nearly level far off. Pre-drawn
 /// cars at a scale step are drawn from this angle, so a far car shows its
@@ -365,8 +308,8 @@ pub struct Art {
     pub city_post: Steps,
     /// Bend-warning boards; pointing right, mirrored for left.
     pub chevron: Steps,
-    /// Traffic cars from behind.
-    pub traffic: Steps,
+    /// Traffic: every vehicle variant ([`traffic::VARIANTS`]).
+    pub traffic: Vec<Steps>,
     /// The ghost of the player's best run: the player's car, pale and
     /// dithered, with a solid outline.
     pub ghost: Steps,
@@ -390,7 +333,7 @@ impl Art {
             snow_post: Steps::new(0.4, 1.4, snow_post),
             city_post: Steps::new(0.4, 1.4, city_post),
             chevron: Steps::new(1.6, 2.4, chevron),
-            traffic: Steps::new(2.0, 1.5, |u, v, w, _h| car(u, v, w, TRAFFIC, 0.0, 0)),
+            traffic: traffic::all(),
             ghost: Steps {
                 size_m: (1.8, 1.2),
                 sprites: SCALES.iter().map(|&s| car::ghost(s, pitch_at(s))).collect(),
@@ -536,7 +479,17 @@ impl Art {
 
     /// Each kind of traffic, every livery.
     pub fn traffic_kinds(&self) -> Vec<&Steps> {
-        vec![&self.traffic]
+        self.traffic.iter().collect()
+    }
+
+    /// The vehicle traffic car `t` is drawn as: a variant picked by a hash
+    /// of where it starts, its lane and its speed, so it keeps its looks
+    /// all race and every replay. Presentation only.
+    pub fn traffic_for(&self, t: &racer_sim::traffic::TrafficCar) -> &Steps {
+        let h = racer_sim::rng::mix64(
+            (t.z0_dm as u64) << 32 ^ (t.lane_cm as u16 as u64) << 16 ^ t.speed_dms as u64,
+        );
+        &self.traffic[(h % self.traffic.len() as u64) as usize]
     }
 }
 
@@ -547,13 +500,14 @@ mod tests {
     #[test]
     fn steps_grow_and_pick_the_nearest() {
         let art = Art::new();
-        let s = &art.traffic;
+        let s = &art.traffic[0];
         assert_eq!(s.sprites.len(), SCALES.len());
         assert!(s.sprites.windows(2).all(|p| p[1].w > p[0].w));
         assert!(s.pick(0.3).is_none(), "too far to draw");
         assert_eq!(s.pick(1.0).unwrap().w, 2);
-        assert_eq!(s.pick(15.0).unwrap().w, 30);
-        assert_eq!(s.pick(100.0).unwrap().w, 30, "nearest is the largest");
+        let big = s.sprites.last().unwrap();
+        assert_eq!(s.pick(15.0).unwrap(), big);
+        assert_eq!(s.pick(100.0).unwrap(), big, "nearest is the largest");
         // Between 6.6 and 10 the ratio decides: 8 is nearer 6.6 (x1.21)
         // than 10 (x1.25).
         assert_eq!(s.pick(8.0).unwrap(), &s.sprites[4]);
@@ -573,10 +527,9 @@ mod tests {
             &art.snow_post,
             &art.city_post,
             &art.chevron,
-            &art.traffic,
             &art.ghost,
         ];
-        for k in all {
+        for k in all.into_iter().chain(art.traffic.iter()) {
             for s in &k.sprites {
                 assert!(s.px.iter().all(|&c| c == Sprite::CLEAR || c < 16));
                 assert!(s.px.iter().any(|&c| c != Sprite::CLEAR), "empty sprite");
