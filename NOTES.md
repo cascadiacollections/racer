@@ -556,3 +556,57 @@ drawn in code at startup, nothing is scaled or rotated at draw time.
   (`0x4a5c1bcc8fc9fdfb`) are unchanged. Golden screens: `title` moved (the
   DAILY button), `title_daily` is new.
 
+
+## Halloween season (2026-10-19)
+
+DESIGN §5.2. `racer_godot::season`: a `Season` with a calendar window
+(HALLOWEEN, October 19 to November 1 inclusive, every year), judged by the
+daily's UTC day (`Intents::today`); `--racer-season halloween|none` forces
+it. In season every biome is painted as its twin (`Look`): PUMPKIN PATCH,
+GHOST COVE, HAUNTED PINES, BLOOD MOON MESA, MONSTER CITY.
+
+- **Nothing simulated moved.** The season lives in the Godot crate only and
+  is stored nowhere (not in layouts, codes, stamps, ghosts, `daily.txt` or
+  run files); a layout's biome shows as its twin in season. No `SIM_EPOCH`
+  bump; the determinism digest is still `0x4a5c1bcc8fc9fdfb` (200 runs,
+  432,547 events, 0 divergences); golden runs pass unchanged; no sim file
+  was touched.
+- **Art.** Each twin is a `biome_palette` table (only the six scenery
+  indices change; tested against its biome's table index by index) plus
+  its own layers in `scenery.rs`: a moon each (a low harvest moon, a pale
+  one, a cold one, a huge red one, a greenish one), a shipwreck and fog
+  bands, dead pines in mist, black mesas with a red rim, orange windows
+  (red and yellow side by side), a crooked tower. Five 7×3 two-frame bats
+  drift at half the sky's parallax and flap on `Game::anim()` (the app
+  clock, 30 steps a second), never the race tick. Roadside: posts become
+  jack-o'-lanterns on stakes, rocks pumpkins or a gravestone and cross,
+  flora scarecrows (one in three a dead tree), dead trees, dead pines,
+  withered cacti with a crow, green street lights: the same sprite sizes,
+  so the sim's footprints are untouched. The ghost-ahead HUD ink in a twin
+  is ICE (contrast-tested like the biomes').
+- **Title and forks.** HAPPY HALLOWEEN on an ink plate between two
+  jack-o'-lanterns (their faces go dark for a frame now and then), the
+  rolling road and its name as twins; fork cards name the twin.
+- **Raster cost**, this machine (release, 180×360, 4000 frames,
+  `raster_bench`): MEADOW 102.5 → PUMPKIN PATCH 38.7 µs, COAST 89.4 →
+  GHOST COVE 36.7, ALPINE 97.9 → HAUNTED PINES 43.8, DESERT DUSK 34.0 →
+  BLOOD MOON MESA 36.7, NIGHT CITY 42.7 → MONSTER CITY 44.2. Twins have
+  no clouds (the daylight biomes' main cost); the moons, mist, tower and
+  bats add a few µs at most.
+- **Golden frames.** No existing digest moved (the harness passes no day
+  and no season). Added `twin_pumpkin_patch`, `twin_ghost_cove`,
+  `twin_haunted_pines`, `twin_blood_moon_mesa`, `twin_monster_city` (the
+  biome scenes with the season on, bats mid-flight) and the screen
+  `title_halloween` (2026-10-19, the season taken from the day). The
+  `title_daily` golden is on that same day, so it now pins the season off
+  with the flag's override to keep its digest.
+- **Site.** `tools/build_site.py` now reads every palette in palette.rs and
+  holds each frame to one of them (writing each PNG with that frame's
+  table; composites merge tables); new `biomes.png`, `twins.png` and
+  screen images (title, daily title, Halloween title, TRACKS, editor).
+  The page gains a Halloween section and a section on what shipped since
+  it was written (daily, ghosts, the editor and codes, biomes, sound,
+  sprites). `pages.yml`'s path filters follow the sprites directory,
+  scenery, season and screens.
+- Not tried on a phone: whether the bats read at the Pixel's density and
+  how dark the twins' night skies look on its panel.
