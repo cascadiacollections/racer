@@ -402,3 +402,46 @@ UI.
   `project.godot` unchanged (its stray `.import` files for docs/site images
   were deleted, not committed).
 - `_typos.toml` ignores quoted base32 runs of 30+ characters (the codes).
+
+## Track editor, Phase 2 (2026-10-18)
+
+DESIGN §9.11 (the editor), §9.4 (length-scaled proof rules), §9.6 (run
+file format 2).
+
+- **Nothing generated moved.** The perfect-bot band became a field of
+  `solver::Rules` (generated rules set `PERFECT_LEFT`), and the race cap
+  became `race::race_cap` (four minutes unless the finish is past 3,840 m,
+  which no generated track reaches). Golden runs pass unchanged, no
+  `SIM_EPOCH` bump, the determinism digest is still `0x4a5c1bcc8fc9fdfb`
+  (200 runs, 432,547 inputs, 0 divergences) and `batch --seeds 200` prints
+  the same numbers as before (1,009 first draw, 24 fallback, 3.9% human run
+  failure).
+- **Long layouts.** Three generated first tracks end to end (7.6 km, eight
+  gates) failed `PerfectBand(2500)` under the fixed 6–18 s band; two end to
+  end (5.1 km) left 13–16 s and passed. With the band's top edge scaled by
+  length (`perfect_band`) the 7.6 km layout proves (tested), in about
+  130 ms on this machine (release, one thread). `PROOF_RULES` is 2; the
+  bundled courses were restamped (only their stamps and checksums changed:
+  same timers), and a Phase 1 stamp reads `Stale` and re-proves to the same
+  timers (tested with FIRST LIGHT's Phase 1 code).
+- **Run file format 2** carries a custom race's layout code; generated runs
+  are still format 1 byte for byte. `playstats` reads both and replays
+  custom races on their own track (tested end to end through the binary).
+- **Golden screens.** `title` (TRACKS beside DEMO), `paused` (FORK TRACK)
+  and `time_up` (FORK TRACK and the SEED line) moved; `racing_start` and
+  `fork` did not; eight editor screens were added (`tracks`,
+  `editor_bend`, `editor_proving`, `editor_failed`, `editor_menu`,
+  `editor_save`, `editor_name`, `editor_seed`). The render goldens
+  (`golden_frames`) are unchanged. `dump_screens` writes them all to
+  `target/frames/screen_*.ppm`.
+- **Desktop check.** `cargo build -p racer-godot`, a headless import and a
+  300-frame headless run start clean (the known exit-time audio leak
+  aside); `git diff project.godot` is empty after the import (its stray
+  `.import` files for docs/site images were deleted again). The editor's
+  input and drawing are covered engine-free; it has not been tried on the
+  Pixel yet, nor the Android clipboard.
+- **Gotchas.** Crockford base32 reads `O`, `I` and `L` as digits, so the
+  word "origin" is a valid run of code characters: the paste search stops
+  a code at a line starting `origin` or `#`, and tries shorter cuts at each
+  space or line break so words after a code are not swallowed. A prefix
+  inside a word (`HARD`, `WORLD`) does not start a candidate.

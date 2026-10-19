@@ -480,11 +480,11 @@ impl Game {
             self.cache.insert(key.0, key.1, key.2, track.clone());
             self.ready.insert(key);
             self.fx.push(Effect::Redraw);
-            if self.editor.pending_fork == Some(key) && self.demo.is_none() {
+            // FROM SEED's track: the draft, kept on disk (the editor may
+            // have been left meanwhile; it opens on the fork next time).
+            if self.editor.pending_fork == Some(key) {
                 let out = self.editor.forked(key, &track, self.builder.as_mut());
-                if self.mode == Mode::Editor {
-                    self.carry_out(out);
-                }
+                self.carry_out(out);
             }
         }
         let proofs = self.builder.proofs();
