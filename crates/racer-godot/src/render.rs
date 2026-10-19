@@ -552,29 +552,72 @@ pub fn road(c: &mut Canvas, l: &Layout, art: &Art, decor: &Decor, s: &RaceScene)
     v
 }
 
-/// A checkpoint gate: two posts and a banner over the road.
+/// A checkpoint gate: two posts and a banner over the road. The posts are
+/// white with a grey shadow side and red bands; the banner is yellow (the
+/// finish: chequered) inside an ink border, and once it is tall enough
+/// it names itself, CHECKPOINT or FINISH, in ink on a plate of its own.
 fn gate(c: &mut Canvas, at: &Placed, hw: f64, finish: bool, bottom: i32) {
     let s = at.scale;
     let y_max = at.clip.min(bottom);
     let reach = ((hw + 0.8) * s).round() as i32;
     let post = ((0.4 * s).round() as i32).max(1);
     let (top, band) = ((5.5 * s).round() as i32, ((1.2 * s).round() as i32).max(1));
-    for y in (at.y - top).max(0)..at.y.min(y_max) {
-        c.span(at.x - reach - post, at.x - reach, y, WHITE);
-        c.span(at.x + reach, at.x + reach + post, y, WHITE);
+    let stripe = ((0.6 * s).round() as i32).max(1);
+    let y0 = at.y - top;
+    for y in y0.max(0)..at.y.min(y_max) {
+        // Red bands up the posts, every other stripe.
+        let red = post >= 2 && ((y - y0) / stripe) % 2 == 1;
+        for (x0, x1) in [
+            (at.x - reach - post, at.x - reach),
+            (at.x + reach, at.x + reach + post),
+        ] {
+            c.span(x0, x1, y, if red { RED } else { WHITE });
+            if post >= 3 {
+                c.put(x1 - 1, y, if red { RED_DK } else { ASPHALT_LT });
+            }
+        }
     }
-    for y in (at.y - top).max(0)..(at.y - top + band).min(y_max) {
-        for x in at.x - reach - post..at.x + reach + post {
-            let cell = ((x - at.x).div_euclid(band.max(2) / 2 + 1)
-                + (y - at.y + top) / (band / 2 + 1))
-                & 1;
-            let ink = match (finish, cell == 0) {
-                (true, true) => WHITE,
-                (true, false) => INK,
-                (false, true) => YELLOW,
-                (false, false) => INK,
+    let (bx0, bx1) = (at.x - reach - post, at.x + reach + post);
+    let border = band >= 4;
+    for y in y0.max(0)..(y0 + band).min(y_max) {
+        let edge_row = border && (y == y0 || y == y0 + band - 1);
+        for x in bx0..bx1 {
+            let ink = if edge_row || (border && (x == bx0 || x == bx1 - 1)) {
+                INK
+            } else {
+                let cell =
+                    ((x - at.x).div_euclid(band.max(2) / 2 + 1) + (y - y0) / (band / 2 + 1)) & 1;
+                match (finish, cell == 0) {
+                    (true, true) => WHITE,
+                    (true, false) => INK,
+                    (false, _) => YELLOW,
+                }
             };
             c.put(x, y, ink);
+        }
+    }
+    // A checkpoint's banner, too short for a word, gets ink chevrons.
+    let label = if finish { "FINISH" } else { "CHECKPOINT" };
+    let tw = crate::font::small_width(label) as i32;
+    if band >= 7 && tw + 6 <= bx1 - bx0 {
+        let (plate, ink) = if finish { (WHITE, INK) } else { (YELLOW, INK) };
+        let ty = y0 + (band - 5) / 2;
+        if ty + 5 < y_max {
+            c.rect(at.x - tw / 2 - 2, ty - 1, tw + 4, 7, plate);
+            c.text(at.x - tw / 2, ty, label, ink, 1);
+        }
+    } else if !finish && band >= 5 {
+        // Arrows: ">" marks across the banner, `h` rows each way.
+        let h = (band - 2) / 2;
+        let mid = y0 + band / 2;
+        let mut x = bx0 + 2;
+        while x + h < bx1 - 2 {
+            for d in 1 - h..h {
+                if mid + d < y_max {
+                    c.put(x + h - 1 - d.abs(), mid + d, INK);
+                }
+            }
+            x += h + 3;
         }
     }
 }
@@ -867,9 +910,9 @@ pub(crate) mod tests {
     fn draw(s: &RaceScene, h: i32) -> Canvas {
         let l = Layout::new(h);
         let mut c = Canvas::new(l.w, l.h);
-        let art = Art::new();
+        let art = Art::shared();
         let decor = Decor::new(s.track, s.biome);
-        race_frame(&mut c, &l, &art, &decor, s, Held::default());
+        race_frame(&mut c, &l, art, &decor, s, Held::default());
         c
     }
 
@@ -940,7 +983,7 @@ pub(crate) mod tests {
         // Under the car's nose, between its tyres: tarmac shows only at the
         // sides of the car sprite; check just outside it.
         let row = v.car_row() - 2;
-        let half = Art::new().car.get(CarFrame::Straight).body.w / 2;
+        let half = Art::shared().car.get(CarFrame::Straight).body.w / 2;
         let tarmac = c.get(90 - half - 4, row);
         assert!(
             tarmac == rgba(ASPHALT_LT) || tarmac == rgba(ASPHALT_DK) || tarmac == rgba(WHITE),
@@ -1203,7 +1246,7 @@ pub(crate) mod tests {
         let hidden = (40..120)
             .map(|k| k as f64 * SEG_LEN + 0.5)
             .find(|&z| {
-                let art = Art::new();
+                let art = Art::shared();
                 !v.visible((z / SEG_LEN) as i64)
                     && v.place(z, 0.0).is_some_and(|p| {
                         art.ghost
@@ -1308,6 +1351,27 @@ pub(crate) mod tests {
         s.ghost = Some((60.0 * SEG_LEN + 7.0, -2.0));
         s.ghost_note = Some(-96);
         out.push(("ghost_ahead", draw(&s, 360)));
+        // The ghost down a straight at 10, 20 and 40 m: how far it reads
+        // (the marker shows past ~15 m).
+        let strip = fixtures::drag_strip();
+        for (name, d) in [
+            ("ghost_10m", 10.0),
+            ("ghost_20m", 20.0),
+            ("ghost_40m", 40.0),
+        ] {
+            let mut s = scene(&strip, 40.0, 0.0, 0);
+            s.ghost = Some((40.0 + d, 1.0));
+            out.push((name, draw(&s, 360)));
+        }
+        // A checkpoint gate close ahead, braking for it; the finish
+        // close ahead, boosting at it.
+        let mut s = scene(&show, 120.0 * SEG_LEN - 6.0, 0.0, 0);
+        s.input = Input::new(0, true, false);
+        out.push(("gate_ahead", draw(&s, 360)));
+        let mut s = scene(&show, 180.0 * SEG_LEN - 9.0, 0.5, 0);
+        s.next_gate = 1;
+        s.car.boost_ticks = 30;
+        out.push(("finish_ahead", draw(&s, 360)));
         // One scene per biome but the meadow's (every scene above is a
         // meadow): the showcase's run-up, posts, rock and traffic ahead,
         // the backdrop scrolled to show its layers.

@@ -489,9 +489,9 @@ mod tests {
             ..Intents::default()
         };
         g.tick(1.0 / 30.0, &i);
-        let art = Art::new();
+        let art = Art::shared();
         let mut c = Canvas::new(1, 1);
-        let b = frame(g, &mut c, &art);
+        let b = frame(g, &mut c, art);
         g.set_buttons(b.clone());
         (c, b)
     }

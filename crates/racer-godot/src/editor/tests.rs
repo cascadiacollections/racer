@@ -45,7 +45,7 @@ fn step(g: &mut Game, events: Vec<Event>) -> (Vec<Effect>, Vec<Button>, Canvas) 
     };
     let fx = g.tick(1.0 / 30.0, &i);
     let mut c = Canvas::new(1, 1);
-    let b = crate::screens::frame(g, &mut c, &Art::new());
+    let b = crate::screens::frame(g, &mut c, Art::shared());
     g.set_buttons(b.clone());
     (fx, b, c)
 }

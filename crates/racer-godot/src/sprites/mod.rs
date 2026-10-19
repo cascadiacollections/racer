@@ -9,13 +9,14 @@
 //!   ([`solid`]) drawn once per pose and size: the player's car in every
 //!   lean, drift and spin frame, brake lamps off and lit; traffic and the
 //!   ghost at every step, from the angle the camera sees that depth at.
-//! - Roadside things are shape functions over the unit square, sampled at
-//!   every size.
+//! - Roadside things ([`roadside`]) are shapes in metres sampled at
+//!   every size, lit and edged once a size can carry it.
 //!
 //! Every pixel is a palette index; the shapes only ever pick from
 //! [`crate::palette`]. The cars use only the indices every biome shares.
 
 pub mod car;
+pub mod roadside;
 pub mod solid;
 pub mod traffic;
 
@@ -90,190 +91,6 @@ fn sample(w: i32, h: i32, shape: &impl Fn(f64, f64, i32, i32) -> u8) -> Sprite {
     s
 }
 
-const C: u8 = Sprite::CLEAR;
-
-/// A marker post: white, a red band at the top.
-fn post(_u: f64, v: f64, _w: i32, _h: i32) -> u8 {
-    if v < 0.25 {
-        RED
-    } else {
-        WHITE
-    }
-}
-
-/// A boulder: a rounded lump, lit from the top left.
-fn rock(u: f64, v: f64, _w: i32, _h: i32) -> u8 {
-    let (dx, dy) = (u - 0.5, (v - 1.0) / 1.9);
-    let r = dx * dx + dy * dy;
-    if r > 0.25 {
-        C
-    } else if dx < -0.05 && dy < -0.25 {
-        GRAVEL
-    } else {
-        BROWN
-    }
-}
-
-/// A roadside tree: a trunk under a round crown.
-fn tree(u: f64, v: f64, _w: i32, _h: i32) -> u8 {
-    let (dx, dy) = (u - 0.5, v - 0.38);
-    if dx * dx + dy * dy * 0.9 < 0.13 {
-        if dx < -0.1 && dy < -0.08 {
-            GRASS_LT
-        } else {
-            GRASS_DK
-        }
-    } else if v > 0.6 && (u - 0.5).abs() < 0.09 {
-        BROWN
-    } else {
-        C
-    }
-}
-
-/// A palm (COAST): a trunk leaning right, ringed, under a crown of fronds
-/// drooping either way.
-fn palm(u: f64, v: f64, _w: i32, _h: i32) -> u8 {
-    // The trunk curves: its centre moves right as it rises.
-    let centre = 0.5 + 0.12 * (1.0 - v) * (1.0 - v);
-    if v > 0.22 && (u - centre).abs() < 0.06 {
-        return if ((v * 40.0) as i32) % 3 == 0 {
-            GRAVEL
-        } else {
-            BROWN
-        };
-    }
-    let (cx, cy) = (0.57, 0.2);
-    let (dx, dy) = (u - cx, v - cy);
-    // Fronds: arcs that rise from the crown and droop, two either side,
-    // thinning towards their tips.
-    for (k, droop, lift) in [
-        (1.0, 2.2, 0.5),
-        (-1.0, 2.2, 0.5),
-        (1.0, 1.0, 0.15),
-        (-1.0, 1.0, 0.15),
-    ] {
-        let x = dx * k;
-        if (0.0..0.45).contains(&x) {
-            let y = droop * x * x - lift * x;
-            if (dy - y).abs() < 0.05 - x * 0.07 {
-                return HILLS;
-            }
-        }
-    }
-    if dx * dx + dy * dy < 0.004 {
-        return BROWN;
-    }
-    C
-}
-
-/// A saguaro (DESERT DUSK): a ribbed column with an arm either side.
-fn cactus(u: f64, v: f64, _w: i32, _h: i32) -> u8 {
-    let body = (u - 0.5).abs() < 0.12 && v > 0.04;
-    // Left arm: out at v 0.55, up to v 0.3; right arm: out at 0.45, up to 0.2.
-    let left = (v > 0.5 && v < 0.6 && u > 0.18 && u < 0.4)
-        || ((u - 0.22).abs() < 0.07 && v > 0.3 && v < 0.6);
-    let right = (v > 0.4 && v < 0.5 && u > 0.6 && u < 0.82)
-        || ((u - 0.78).abs() < 0.07 && v > 0.2 && v < 0.5);
-    if body || left || right {
-        // A rib of shade down the body's right side.
-        if body && u > 0.54 && u < 0.58 {
-            GRASS_DK
-        } else {
-            HILLS
-        }
-    } else {
-        C
-    }
-}
-
-/// A pine (ALPINE): three tiers of branches, snow on each tier's upper
-/// edge, a short trunk.
-fn pine(u: f64, v: f64, _w: i32, _h: i32) -> u8 {
-    let dx = (u - 0.5).abs();
-    if v > 0.85 {
-        return if dx < 0.07 { BROWN } else { C };
-    }
-    // Each tier is a triangle; the lower tiers are wider.
-    for (top, bottom, half) in [(0.0, 0.4, 0.26), (0.22, 0.64, 0.38), (0.45, 0.87, 0.5)] {
-        if v >= top && v < bottom {
-            let reach = half * (v - top) / (bottom - top);
-            if dx < reach {
-                // Snow along the tier's sloping edge.
-                return if reach - dx < 0.07 && v < bottom - 0.08 {
-                    WHITE
-                } else {
-                    HILLS
-                };
-            }
-        }
-    }
-    C
-}
-
-/// A street light (NIGHT CITY): a grey post with an arm out to the left
-/// (over the road when it stands right of it; mirrored on the left) and a
-/// lit lamp.
-fn lamp(u: f64, v: f64, _w: i32, _h: i32) -> u8 {
-    let post = (u - 0.85).abs() < 0.06;
-    if post && v > 0.92 {
-        return ASPHALT_DK;
-    }
-    if post && v > 0.06 {
-        return ASPHALT_LT;
-    }
-    if v > 0.04 && v < 0.09 && u > 0.2 && u < 0.9 {
-        return ASPHALT_LT;
-    }
-    if (0.09..0.15).contains(&v) && u > 0.12 && u < 0.38 {
-        return if v < 0.12 && u > 0.18 && u < 0.32 {
-            WHITE
-        } else {
-            YELLOW
-        };
-    }
-    C
-}
-
-/// A snow pole (ALPINE's marker post): red and white bands.
-fn snow_post(_u: f64, v: f64, _w: i32, _h: i32) -> u8 {
-    if ((v * 5.0) as i32) % 2 == 0 {
-        RED
-    } else {
-        WHITE
-    }
-}
-
-/// A city bollard (NIGHT CITY's marker post): white, with a yellow
-/// reflector at the top.
-fn city_post(_u: f64, v: f64, _w: i32, _h: i32) -> u8 {
-    if v < 0.22 {
-        YELLOW
-    } else if v < 0.3 {
-        INK
-    } else {
-        WHITE
-    }
-}
-
-/// A bend-warning board on a post: a yellow board with a black chevron
-/// pointing right (mirrored for a left bend).
-fn chevron(u: f64, v: f64, _w: i32, _h: i32) -> u8 {
-    if v < 0.6 {
-        let (x, y) = (u, v / 0.6);
-        // A ">" from two strokes meeting at the right.
-        let arm = (x - 0.25 - 0.45 * (1.0 - (2.0 * y - 1.0).abs())).abs();
-        if arm < 0.13 && x > 0.12 && x < 0.88 {
-            INK
-        } else {
-            YELLOW
-        }
-    } else if (u - 0.5).abs() < 0.1 {
-        GRAVEL
-    } else {
-        C
-    }
-}
-
 /// The camera's angle down at something `scale` pixels a metre away,
 /// radians: steep close to the camera, nearly level far off. Pre-drawn
 /// cars at a scale step are drawn from this angle, so a far car shows its
@@ -323,16 +140,16 @@ impl Art {
     /// Draw everything. Called once.
     pub fn new() -> Art {
         Art {
-            post: Steps::new(0.4, 1.4, post),
-            rock: Steps::new(2.2, 1.3, rock),
-            tree: Steps::new(4.0, 7.0, tree),
-            palm: Steps::new(4.0, 8.0, palm),
-            cactus: Steps::new(2.4, 5.0, cactus),
-            pine: Steps::new(3.4, 8.0, pine),
-            lamp: Steps::new(3.0, 8.0, lamp),
-            snow_post: Steps::new(0.4, 1.4, snow_post),
-            city_post: Steps::new(0.4, 1.4, city_post),
-            chevron: Steps::new(1.6, 2.4, chevron),
+            post: roadside::post(),
+            rock: roadside::rock(),
+            tree: roadside::tree(),
+            palm: roadside::palm(),
+            cactus: roadside::cactus(),
+            pine: roadside::pine(),
+            lamp: roadside::lamp(),
+            snow_post: roadside::snow_post(),
+            city_post: roadside::city_post(),
+            chevron: roadside::chevron(),
             traffic: traffic::all(),
             ghost: Steps {
                 size_m: (1.8, 1.2),
@@ -366,6 +183,16 @@ impl Art {
             Biome::Night => &self.city_post,
             _ => &self.post,
         }
+    }
+}
+
+impl Art {
+    /// One set for the whole test run: drawing it is cheap in release
+    /// but tens of milliseconds in a debug build.
+    #[cfg(test)]
+    pub fn shared() -> &'static Art {
+        static ART: std::sync::OnceLock<Art> = std::sync::OnceLock::new();
+        ART.get_or_init(Art::new)
     }
 }
 
