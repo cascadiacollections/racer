@@ -317,8 +317,12 @@ Decided, not built:
   can carry it. The ghost is the player's car, pale, its body
   checkerboarded inside a solid outline, with a marker over it past
   ~15 m.
-- **Controls**: Left/Right steer, Down brakes, Drift held. Touch and
-  keys/pad equally first-class.
+- **Controls**: Portrait touch defaults to one thumb in the area below the
+  HUD: horizontal drag steers proportionally, upward drag holds drift,
+  downward drag brakes; neutral vertical position returns to automatic
+  throttle. Lift, cancellation, resize or focus loss releases the gesture.
+  A saved Settings toggle restores the original left/right, brake and drift
+  buttons. Keys/pad remain first-class; every scheme records the same input byte.
 - **Devices**: Android export with Salt Line's stripped templates and the
   `device_power` addon; determinism digests on devices.
 

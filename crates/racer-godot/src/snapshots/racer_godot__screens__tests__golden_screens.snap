@@ -2,11 +2,11 @@
 source: crates/racer-godot/src/screens.rs
 expression: out
 ---
-title: 0x0ab8fb1500888ff8
-title_daily: 0xa2175dab935f2e78
-title_halloween: 0xcffcbac375e603f2
-racing_start: 0x75e4ac692ddbc32c
-paused: 0xa0256191867936e8
+title: 0xc5c9e7acc1fd35a4
+title_daily: 0xf5de74ee7044393c
+title_halloween: 0x50ef6dc98d9ce0aa
+racing_start: 0xbb96c9ea256c6810
+paused: 0x525cda665a9b35a2
 fork: 0x043fbd16b4f2848e
 time_up: 0xf0c3af0b0f9be98a
 tracks: 0x86eca08b718673a6

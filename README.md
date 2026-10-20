@@ -109,12 +109,19 @@ one to the other needs an uninstall, which deletes saved runs.
 
 | | Touch | Keys | Pad |
 |---|---|---|---|
-| Steer | `◀` `▶` pads (slide across to swap) | `←` `→` or `A` `D` | left stick or d-pad |
-| Brake | `BRAKE` | `↓` or `S` | d-pad down, X, L1 or L2 |
-| Drift | `DRIFT`, held with some steering | `Space` or `Shift` | A, R1 or R2 |
+| Steer | Drag left/right from your touch-down point | `←` `→` or `A` `D` | left stick or d-pad |
+| Brake | Pull down while steering | `↓` or `S` | d-pad down, X, L1 or L2 |
+| Drift | Push up while steering | `Space` or `Shift` | A, R1 or R2 |
 | Pause | the pause button, top left | `Esc` or `P` | Start or Back |
 
-The throttle is automatic. Keys and touch pads ramp the steering to full lock
+One-thumb controls are the default in portrait: touch anywhere in the control
+area below the HUD, drag sideways to steer, up to drift, and down to brake.
+Return vertically to centre to accelerate; lift to release all controls. A
+small dead zone and hysteresis prevent accidental changes. Either thumb works.
+**Settings**, on the title and pause screens, switches to the original
+left/right, brake and drift buttons; the choice is saved across launches.
+
+The throttle is automatic. Keys and the original touch buttons ramp the steering to full lock
 over 200 ms, so a tap is a nudge; the stick is not ramped. On a phone the pads
 sit above Android's gesture area. Every device quantises to the same one byte
 per tick (seven steering levels, brake, drift), so a replay cannot tell them

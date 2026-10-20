@@ -7,7 +7,11 @@
 //! lifts (capture on down), so a finger held through a screen change never
 //! presses whatever appears under it.
 //!
-//! One exception, for driving: a finger on a steering button that slides
+//! The default Drive surface captures one thumb at its touch-down point:
+//! sideways drag steers, up holds drift and down brakes. Lift resets every
+//! axis. A second thumb never steals the active gesture.
+//!
+//! In the original button scheme, one exception for driving: a finger on a steering button that slides
 //! onto the other steering button re-binds to it. Steering is one thumb
 //! rocking between L and R; lifting it to change direction would cost a
 //! frame or two at the worst moment. Sliding onto any other button still
@@ -22,6 +26,11 @@ use crate::layout::Rect;
 /// What a button does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
+    /// Floating one-thumb steering and vertical brake/drift gesture.
+    Drive,
+    Settings,
+    ToggleControls,
+    CloseSettings,
     Left,
     Right,
     Brake,
@@ -62,16 +71,61 @@ pub struct Button {
 #[derive(Debug, Default)]
 pub struct TouchPad {
     fingers: Vec<(i32, Option<Action>)>,
+    drive: Option<DriveGesture>,
     went_down: Vec<Action>,
     pressed: Vec<Action>,
 }
 
+/// Captured thumb, relative to where it touched down. A second thumb
+/// cannot steal control; releasing the owner returns every axis to neutral.
+#[derive(Clone, Copy, Debug)]
+pub struct DriveGesture {
+    pub finger: i32,
+    pub origin_x: f32,
+    pub origin_y: f32,
+    pub x: f32,
+    pub y: f32,
+    vertical: i8,
+}
+
 impl TouchPad {
+    /// Raw stick axis; the normal stick dead zone and seven-level
+    /// quantisation apply, so touch still records the same replay byte.
+    pub fn drive_axis(&self) -> f32 {
+        self.drive
+            .map_or(0.0, |d| ((d.x - d.origin_x) / 30.0).clamp(-1.0, 1.0))
+    }
+
+    pub fn drive_brake(&self) -> bool {
+        self.drive.is_some_and(|d| d.vertical == 1)
+    }
+
+    pub fn drive_drift(&self) -> bool {
+        self.drive.is_some_and(|d| d.vertical == -1)
+    }
+
+    pub fn gesture(&self) -> Option<DriveGesture> {
+        self.drive
+    }
+
     /// A finger touched down at `(x, y)`; `buttons` is the layout last
     /// drawn. Later buttons are drawn over earlier ones, so the last one
     /// containing the point wins.
     pub fn finger_down(&mut self, index: i32, x: f32, y: f32, buttons: &[Button]) {
         let action = hit(buttons, x, y);
+        if self.drive.is_some_and(|d| d.finger == index) {
+            self.drive = None;
+        }
+        if action == Some(Action::Drive) && self.drive.is_none() {
+            self.drive = Some(DriveGesture {
+                finger: index,
+                origin_x: x,
+                origin_y: y,
+                x,
+                y,
+                vertical: 0,
+            });
+        }
         self.fingers.retain(|(i, _)| *i != index);
         self.fingers.push((index, action));
         if let Some(a) = action {
@@ -82,6 +136,21 @@ impl TouchPad {
     /// A finger moved. Only a steering finger can change button: onto the
     /// other steering button.
     pub fn finger_moved(&mut self, index: i32, x: f32, y: f32, buttons: &[Button]) {
+        if let Some(d) = self.drive.as_mut().filter(|d| d.finger == index) {
+            d.x = x;
+            d.y = y;
+            let dy = y - d.origin_y;
+            // Hysteresis prevents brake/drift chatter at the boundary.
+            d.vertical = if dy >= 14.0 {
+                1
+            } else if dy <= -14.0 {
+                -1
+            } else if (d.vertical == 1 && dy > 8.0) || (d.vertical == -1 && dy < -8.0) {
+                d.vertical
+            } else {
+                0
+            };
+        }
         let Some(f) = self.fingers.iter_mut().find(|(i, _)| *i == index) else {
             return;
         };
@@ -94,12 +163,16 @@ impl TouchPad {
 
     /// A finger lifted.
     pub fn finger_up(&mut self, index: i32) {
+        if self.drive.is_some_and(|d| d.finger == index) {
+            self.drive = None;
+        }
         self.fingers.retain(|(i, _)| *i != index);
     }
 
     /// Let go of everything: focus lost, or the screen changed under the
     /// fingers.
     pub fn release_all(&mut self) {
+        self.drive = None;
         self.fingers.clear();
         self.went_down.clear();
         self.pressed.clear();
@@ -147,6 +220,59 @@ fn hit(buttons: &[Button], x: f32, y: f32) -> Option<Action> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn gesture_pad() -> [Button; 1] {
+        [Button {
+            rect: Rect::new(0, 0, 180, 92),
+            action: Action::Drive,
+        }]
+    }
+
+    #[test]
+    fn one_thumb_steers_brakes_and_drifts_with_hysteresis() {
+        let mut t = TouchPad::default();
+        let b = gesture_pad();
+        t.finger_down(0, 90.0, 46.0, &b);
+        assert_eq!(t.drive_axis(), 0.0);
+        t.finger_moved(0, 105.0, 30.0, &b);
+        assert_eq!(t.drive_axis(), 0.5);
+        assert!(t.drive_drift() && !t.drive_brake());
+        t.finger_moved(0, 120.0, 35.0, &b);
+        assert!(t.drive_drift(), "hysteresis retains drift");
+        t.finger_moved(0, 120.0, 40.0, &b);
+        assert!(!t.drive_drift() && !t.drive_brake());
+        t.finger_moved(0, 60.0, 65.0, &b);
+        assert_eq!(t.drive_axis(), -1.0);
+        assert!(t.drive_brake() && !t.drive_drift());
+        t.finger_moved(0, 60.0, 35.0, &b);
+        assert!(
+            !t.drive_brake() && !t.drive_drift(),
+            "crossing neutral releases brake even between motion events"
+        );
+        t.finger_up(0);
+        assert_eq!(t.drive_axis(), 0.0);
+        assert!(!t.drive_brake() && !t.drive_drift());
+    }
+
+    #[test]
+    fn a_second_finger_cannot_steal_steering_and_cancel_releases_it() {
+        let mut t = TouchPad::default();
+        let b = gesture_pad();
+        t.finger_down(2, 40.0, 46.0, &b);
+        t.finger_down(3, 140.0, 46.0, &b);
+        t.finger_moved(3, 170.0, 66.0, &b);
+        assert_eq!(t.drive_axis(), 0.0);
+        assert!(!t.drive_brake());
+        t.finger_moved(2, -100.0, -100.0, &b);
+        assert_eq!(t.drive_axis(), -1.0);
+        assert!(t.drive_drift(), "capture continues outside the surface");
+        t.finger_up(3);
+        assert!(t.gesture().is_some());
+        t.release_all();
+        assert!(t.gesture().is_none() && !t.active());
+        t.finger_moved(2, 80.0, 80.0, &b);
+        assert_eq!(t.drive_axis(), 0.0);
+    }
 
     fn pad() -> Vec<Button> {
         vec![

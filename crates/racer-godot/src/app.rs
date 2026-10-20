@@ -128,6 +128,8 @@ pub enum Mode {
 pub enum Effect {
     /// Something on screen changed: draw the next frame.
     Redraw,
+    /// Persist the selected touch controls in the user data directory.
+    SaveControls(bool),
     /// The buffer is `w` by `h`: resize the canvas and the window's content
     /// scale.
     Buffer { w: i32, h: i32 },
@@ -193,6 +195,10 @@ pub struct Game {
     pub clock: f64,
     /// Touch state.
     pub touch: TouchPad,
+    /// One-thumb gestures by default; false restores the original buttons.
+    pub modern_touch: bool,
+    /// Settings overlay, accessible on the title and while paused.
+    pub settings: bool,
     /// What is held, for drawing the pad.
     pub held: Held,
     /// Decor of the track on screen.
@@ -294,6 +300,8 @@ impl Game {
             bg: 0.0,
             clock: 0.0,
             touch: TouchPad::default(),
+            modern_touch: true,
+            settings: false,
             held: Held::default(),
             decor: Decor::default(),
             biome: Biome::Meadow,
@@ -512,6 +520,9 @@ impl Game {
 
     /// Whether anything moves on its own this frame.
     pub fn busy(&self) -> bool {
+        if self.settings {
+            return false;
+        }
         match self.mode {
             Mode::Racing => !self.paused,
             Mode::Title | Mode::Building => true,
@@ -523,7 +534,7 @@ impl Game {
 
     /// Whether the engine should idle at the menu frame rate.
     pub fn on_menu(&self) -> bool {
-        self.mode != Mode::Racing || self.paused
+        self.settings || self.mode != Mode::Racing || self.paused
     }
 
     /// The two tracks of the coming fork, if both are built.
@@ -583,6 +594,8 @@ impl Game {
     fn step(&mut self, delta: f64, i: &Intents) {
         self.clock += delta;
         if (i.window != self.window || i.bottom_inset != self.inset_px) && i.window.0 > 0 {
+            self.touch.release_all();
+            self.held = Held::default();
             self.window = i.window;
             self.inset_px = i.bottom_inset;
             let (w, h) = buffer_size(i.window);
@@ -633,6 +646,26 @@ impl Game {
         let any = |keys, pads| i.events.iter().any(|e| pressed(e, keys, pads));
         let confirm = any(bind::CONFIRM, bind::PAD_CONFIRM);
         let pause = any(bind::PAUSE, bind::PAD_PAUSE);
+
+        if self.settings {
+            if self.touch.pressed(Action::ToggleControls) {
+                self.modern_touch = !self.modern_touch;
+                self.touch.release_all();
+                self.held = Held::default();
+                self.ramp = SteerRamp::default();
+                self.fx.push(Effect::SaveControls(self.modern_touch));
+            } else if back || pause || confirm || self.touch.pressed(Action::CloseSettings) {
+                self.settings = false;
+                self.touch.release_all();
+            }
+            self.fx.push(Effect::Redraw);
+            return;
+        }
+        if self.touch.pressed(Action::Settings) && (self.mode == Mode::Title || self.paused) {
+            self.settings = true;
+            self.touch.release_all();
+            return;
+        }
 
         if self.demo.is_some() && self.mode != Mode::Title {
             let woke = i
@@ -963,9 +996,13 @@ impl Game {
         Controls {
             left: t.held(Action::Left),
             right: t.held(Action::Right),
-            brake: t.held(Action::Brake),
-            drift: t.held(Action::Drift),
-            stick: 0.0,
+            brake: t.held(Action::Brake) || (self.modern_touch && t.drive_brake()),
+            drift: t.held(Action::Drift) || (self.modern_touch && t.drive_drift()),
+            stick: if self.modern_touch {
+                t.drive_axis()
+            } else {
+                0.0
+            },
         }
         .or(Controls::held(i))
     }
@@ -1032,8 +1069,8 @@ impl Game {
             held_of(last)
         } else {
             Held {
-                left: controls.left,
-                right: controls.right,
+                left: controls.left || player.steer_level() < 0,
+                right: controls.right || player.steer_level() > 0,
                 brake: controls.brake,
                 drift: controls.drift,
             }
@@ -1270,6 +1307,69 @@ mod tests {
         assert_eq!(g.run.as_ref().unwrap().phase(), RunPhase::Lost);
         frame(&mut g, vec![Event::Key(K::Space)], vec![]);
         assert_eq!(g.mode, Mode::Title);
+    }
+
+    #[test]
+    fn settings_toggle_saves_and_releases_the_current_gesture() {
+        let mut g = game(30.0);
+        frame(&mut g, vec![], vec![]);
+        assert!(g.modern_touch);
+        g.settings = true;
+        g.set_buttons(vec![Button {
+            rect: crate::layout::Rect::new(0, 0, 180, 200),
+            action: Action::ToggleControls,
+        }]);
+        let fx = frame(
+            &mut g,
+            vec![Event::FingerDown {
+                index: 0,
+                x: 80.0,
+                y: 100.0,
+            }],
+            vec![],
+        );
+        assert!(!g.modern_touch && !g.touch.active());
+        assert!(fx.contains(&Effect::SaveControls(false)));
+        frame(&mut g, vec![], vec![]);
+        assert!(!g.modern_touch, "a held touch cannot toggle twice");
+        frame(&mut g, vec![Event::Back], vec![]);
+        assert!(!g.settings);
+    }
+
+    #[test]
+    fn drag_controls_use_proportional_steering_and_focus_loss_releases() {
+        let mut g = game(30.0);
+        start(&mut g);
+        g.set_buttons(vec![Button {
+            rect: g.layout.controls,
+            action: Action::Drive,
+        }]);
+        let y = (g.layout.controls.y + 45) as f32;
+        frame(
+            &mut g,
+            vec![Event::FingerDown {
+                index: 0,
+                x: 90.0,
+                y,
+            }],
+            vec![],
+        );
+        assert_eq!(g.controls(&Intents::default()).quantise().steer_level(), 0);
+        frame(
+            &mut g,
+            vec![Event::FingerMoved {
+                index: 0,
+                x: 110.0,
+                y: y - 18.0,
+            }],
+            vec![],
+        );
+        let input = g.controls(&Intents::default()).quantise();
+        assert_eq!(input.steer_level(), 2);
+        assert!(input.drift() && !input.brake());
+        g.focus_lost();
+        assert!(g.paused && g.touch.gesture().is_none());
+        assert_eq!(g.controls(&Intents::default()).quantise().steer_level(), 0);
     }
 
     #[test]

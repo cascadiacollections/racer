@@ -187,6 +187,8 @@ impl INode2D for Racer {
         let slots = load_layouts_file(crate::editor::store::SLOTS_FILE);
         let draft = load_layouts_file(crate::editor::store::DRAFT_FILE);
         self.g.load_layouts(slots.as_deref(), draft.as_deref());
+        self.g.modern_touch = std::fs::read_to_string(user_path("controls.txt"))
+            .map_or(true, |s| s.trim() != "buttons");
         self.setup_audio();
         self.dev_flags();
         godot_print!(
@@ -302,7 +304,7 @@ impl INode2D for Racer {
         };
         if let Ok(touch) = event.try_cast::<InputEventScreenTouch>() {
             let index = touch.get_index();
-            if touch.is_pressed() {
+            if touch.is_pressed() && !touch.is_canceled() {
                 let pos = self.local(touch.clone().upcast(), touch.get_position());
                 self.events.push(Event::FingerDown {
                     index,
@@ -667,6 +669,16 @@ impl Racer {
     fn apply(&mut self, fx: Vec<Effect>) {
         for e in fx {
             match e {
+                Effect::SaveControls(modern) => {
+                    let path = user_path("controls.txt");
+                    let tmp = path.with_extension("tmp");
+                    let text = if modern { "touch\n" } else { "buttons\n" };
+                    if let Err(e) =
+                        std::fs::write(&tmp, text).and_then(|()| std::fs::rename(&tmp, &path))
+                    {
+                        godot_warn!("racer: could not save controls: {e}");
+                    }
+                }
                 Effect::Redraw => self.redraw.mark(),
                 Effect::Buffer { w, h } => {
                     self.canvas.resize(w, h);
