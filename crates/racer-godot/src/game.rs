@@ -225,6 +225,31 @@ impl INode2D for Racer {
         }
     }
 
+    fn exit_tree(&mut self) {
+        // Stop every voice while the audio driver is still running. Godot
+        // schedules a fade-out on the mixer thread rather than releasing
+        // playback synchronously (godotengine/godot#95484).
+        for player in self
+            .audio
+            .sfx
+            .iter_mut()
+            .chain(self.audio.music.iter_mut())
+            .chain([
+                &mut self.audio.engine,
+                &mut self.audio.drift,
+                &mut self.audio.ambient,
+            ])
+            .flatten()
+        {
+            player.stop();
+            player.set_stream(Gd::<AudioStream>::null_arg());
+        }
+        // Give the mixer a short grace period to consume the stops before
+        // SceneTree teardown shuts the driver down. stop() alone still
+        // leaked the active title WAV on Godot 4.7.2 / Windows ARM64.
+        Os::singleton().delay_msec(100);
+    }
+
     fn draw(&mut self) {
         if let Some(t) = self.texture.clone() {
             self.base_mut().draw_texture(&t, Vector2::ZERO);

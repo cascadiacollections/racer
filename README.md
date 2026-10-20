@@ -75,6 +75,12 @@ track sections and power state; retain logcat, memory and thermal captures.
 The log's p95 is per two-second window, not a percentile over the whole run.
 The demo is silent, so profile a played race separately for audio costs.
 
+After building and importing, `python tools/check_audio_shutdown.py` checks
+that both title tunes shut down cleanly in headless Godot. Use
+`--godot /path/to/godot` if the engine is not on `PATH`. This checks resource
+cleanup, not audible playback. The game allows 100 ms for Godot's mixer to
+release stopped voices during shutdown.
+
 ### Android
 
 Android builds are arm64, exported through Godot's Gradle template with a
