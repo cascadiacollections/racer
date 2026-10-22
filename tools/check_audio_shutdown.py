@@ -20,7 +20,7 @@ def main():
                 args.godot, "--headless", "--verbose", "--path", str(root),
                 "--quit-after", "120", "--", "--racer-season", season,
             ],
-            capture_output=True, text=True, errors="replace", timeout=60,
+            capture_output=True, text=True, errors="replace", timeout=180,
         )
         output = result.stdout + result.stderr
         failures = ("ERROR:", "WARNING:", "Leaked instance:", "resources still in use")

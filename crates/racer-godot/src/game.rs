@@ -515,6 +515,16 @@ impl Racer {
             .chain(os.get_cmdline_user_args().as_slice())
             .map(|s| s.to_string())
             .collect();
+        // A fixed-seed bot run makes on-device profiling captures comparable.
+        // This entry point is absent from ordinary builds.
+        #[cfg(feature = "profiling")]
+        if let Some(seed) = args
+            .iter()
+            .find_map(|a| a.strip_prefix("--racer-profile-seed=")?.parse::<u64>().ok())
+        {
+            godot_print!("racer-prof: starting demo seed {seed}");
+            self.g.start_seed(seed, true);
+        }
         let dev = crate::cli::DevArgs::parse(&args);
         if let Some(season) = dev.season {
             godot_print!("racer: --racer-season: {season:?}");

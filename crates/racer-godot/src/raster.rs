@@ -190,8 +190,23 @@ impl Canvas {
         if y < 0 || y >= self.h {
             return;
         }
-        for x in x0.max(0)..x1.min(self.w) {
-            self.put(x, y, if dither_on(x, y, frac16) { b } else { a });
+        let (start, end) = (x0.max(0), x1.min(self.w));
+        if start >= end {
+            return;
+        }
+        // Resolve the palette and Bayer row once, then copy RGBA pixels
+        // directly into the already-clipped row.
+        let colours = [self.rgba(a), self.rgba(b)];
+        let thresholds = BAYER[y as usize & 3];
+        let row = y as usize * self.w as usize * 4;
+        for (offset, pixel) in self.px[row + start as usize * 4..row + end as usize * 4]
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .enumerate()
+        {
+            let x = start as usize + offset;
+            pixel.copy_from_slice(&colours[(thresholds[x & 3] < frac16) as usize]);
         }
     }
 
@@ -385,6 +400,23 @@ mod tests {
         // at x = 0.
         assert_eq!(c.get(0, 0), rgba(RED));
         assert_eq!(c.get(0, 1), rgba(WHITE));
+    }
+
+    #[test]
+    fn clipped_dither_matches_individual_pixels() {
+        for frac in [0, 1, 7, 8, 15, 16, 255] {
+            for (x0, x1) in [(-8, 20), (1, 8), (3, 4), (9, 2), (20, 30), (-9, -1)] {
+                for y in -1..7 {
+                    let mut actual = Canvas::new(11, 6);
+                    let mut expected = actual.clone();
+                    actual.dither_span(x0, x1, y, RED, WHITE, frac);
+                    for x in x0..x1 {
+                        expected.put(x, y, if dither_on(x, y, frac) { WHITE } else { RED });
+                    }
+                    assert_eq!(actual.bytes(), expected.bytes());
+                }
+            }
+        }
     }
 
     #[test]
