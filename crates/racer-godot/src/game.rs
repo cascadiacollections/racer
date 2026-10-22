@@ -219,7 +219,11 @@ impl INode2D for Racer {
             self.g.set_buttons(buttons);
             #[cfg(feature = "profiling")]
             self.profile.raster(raster.elapsed());
+            #[cfg(feature = "profiling")]
+            let upload = std::time::Instant::now();
             self.upload();
+            #[cfg(feature = "profiling")]
+            self.profile.upload(upload.elapsed());
         }
         #[cfg(feature = "profiling")]
         for line in self.profile.frame(delta, started.elapsed(), &self.g) {
