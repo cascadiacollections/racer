@@ -6,8 +6,8 @@
 //! held into [`Intents`] once a frame; nothing here names a Godot type.
 //!
 //! Touch and keys are equally first-class and end in the same byte:
-//! a key or a touch button builds up to full lock through [`SteerRamp`], a
-//! stick is proportional through [`Input::from_axis`], so a replay cannot
+//! a key or an original touch button builds up to full lock through [`SteerRamp`], a
+//! stick or one-thumb drag is proportional through [`Input::from_axis`], so a replay cannot
 //! tell the devices apart (DESIGN §3.1).
 
 use racer_sim::input::Input;

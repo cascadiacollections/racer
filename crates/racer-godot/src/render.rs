@@ -889,6 +889,56 @@ pub fn pad(c: &mut Canvas, l: &Layout, held: Held) {
     }
 }
 
+/// One-thumb portrait gesture surface, with a floating origin and live
+/// displacement. Only the already-rastered low-resolution canvas is used.
+pub fn touch_pad(
+    c: &mut Canvas,
+    l: &Layout,
+    held: Held,
+    gesture: Option<crate::touch::DriveGesture>,
+) {
+    let p = l.controls;
+    c.rect(l.pad.x, l.pad.y, l.pad.w, l.pad.h, INK);
+    c.span(6, l.w - 6, p.y + 1, ASPHALT_LT);
+    let (label, ink) = if held.brake {
+        ("BRAKE", RED)
+    } else if held.drift {
+        ("DRIFT", YELLOW)
+    } else {
+        ("DRAG TO STEER", ICE)
+    };
+    c.text_centred(l.w / 2, p.y + 6, label, ink, 1);
+    let (ox, oy, dx, dy) = gesture.map_or((l.w / 2, p.y + 45, 0, 0), |d| {
+        (
+            d.origin_x.round() as i32,
+            d.origin_y.round() as i32,
+            (d.x - d.origin_x).clamp(-30.0, 30.0).round() as i32,
+            (d.y - d.origin_y).clamp(-20.0, 20.0).round() as i32,
+        )
+    });
+    // Feedback always fits above Android's gesture area, even if the
+    // captured thumb is dragged outside its initial surface.
+    let (ox, oy) = (ox.clamp(34, l.w - 35), oy.clamp(p.y + 35, l.bottom() - 29));
+    c.span(ox - 29, ox + 30, oy, ASPHALT_LT);
+    c.rect(ox, oy - 19, 1, 39, ASPHALT_LT);
+    c.rect_outline(ox - 8, oy - 8, 17, 17, ASPHALT_LT);
+    c.rect(
+        ox + dx - 5,
+        oy + dy - 5,
+        11,
+        11,
+        if gesture.is_some() { ink } else { ASPHALT_LT },
+    );
+    c.rect(ox + dx - 2, oy + dy - 2, 5, 5, INK);
+    c.text_centred(
+        l.w / 2,
+        l.bottom() - 12,
+        "UP DRIFT   DOWN BRAKE",
+        ASPHALT_LT,
+        1,
+    );
+}
+
 /// A whole racing frame.
 pub fn race_frame(
     c: &mut Canvas,

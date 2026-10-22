@@ -24,6 +24,9 @@ use crate::touch::{Action, Button};
 pub fn frame(g: &mut Game, c: &mut Canvas, art: &Art) -> Vec<Button> {
     let l = g.layout;
     c.resize(l.w, l.h);
+    if g.settings {
+        return settings(g, c, &l);
+    }
     // Menus and the editor in the meadow's colours; a road view sets its
     // biome's (`render::road`).
     c.set_palette(&COLOURS);
@@ -34,6 +37,63 @@ pub fn frame(g: &mut Game, c: &mut Canvas, art: &Art) -> Vec<Button> {
         Mode::Results => results(g, c, &l),
         Mode::Editor => crate::editor::draw::frame(&g.editor, c, &l, g.clock),
     }
+}
+
+/// Settings stay above the portrait gesture inset and are also accessible
+/// while a race is paused. Switching schemes releases all captured touches.
+fn settings_button(c: &mut Canvas, out: &mut Vec<Button>) {
+    let r = Rect::new(128, 2, 50, 22);
+    plate(c, r, false);
+    c.text_centred(r.x + r.w / 2, r.y + 8, "SETTINGS", WHITE, 1);
+    button(out, r, Action::Settings);
+}
+
+fn settings(g: &Game, c: &mut Canvas, l: &Layout) -> Vec<Button> {
+    c.set_palette(&COLOURS);
+    c.fill(INK);
+    banner(c, l.w / 2, 30, "SETTINGS", WHITE, 3);
+    c.text_centred(l.w / 2, 76, "DRIVING CONTROLS", ICE, 1);
+    let mut out = Vec::new();
+    labelled(
+        c,
+        &mut out,
+        Rect::new(10, 96, l.w - 20, 40),
+        if g.modern_touch {
+            "ONE THUMB  ON"
+        } else {
+            "BUTTONS  ON"
+        },
+        Action::ToggleControls,
+        true,
+    );
+    for (y, text) in if g.modern_touch {
+        [
+            (154, "DRAG LEFT / RIGHT TO STEER"),
+            (170, "PUSH UP TO DRIFT"),
+            (186, "PULL DOWN TO BRAKE"),
+            (202, "CENTRE TO ACCELERATE"),
+            (218, "TOUCH DOWN ANYWHERE BELOW HUD"),
+        ]
+    } else {
+        [
+            (154, "ORIGINAL TOUCH BUTTONS"),
+            (170, "LEFT / RIGHT STEER"),
+            (186, "HOLD BRAKE TO SLOW"),
+            (202, "HOLD DRIFT THROUGH A TURN"),
+            (218, "KEYBOARD AND PAD ALSO WORK"),
+        ]
+    } {
+        c.text_centred(l.w / 2, y, text, WHITE, 1);
+    }
+    labelled(
+        c,
+        &mut out,
+        Rect::new(30, l.bottom() - 50, l.w - 60, 34),
+        "DONE",
+        Action::CloseSettings,
+        false,
+    );
+    out
 }
 
 fn button(out: &mut Vec<Button>, rect: Rect, action: Action) {
@@ -93,8 +153,28 @@ fn title(g: &Game, c: &mut Canvas, art: &Art, l: &Layout) -> Vec<Button> {
     banner(c, cx, 74, scene.look().name(), ICE, 1);
     let h = l.hud;
     c.rect(h.x, h.y, h.w, h.h, INK);
-    c.text_centred(cx, h.y + 3, "ARROWS STEER  DOWN BRAKE", ASPHALT_LT, 1);
-    c.text_centred(cx, h.y + 12, "SPACE OR SHIFT DRIFTS", ASPHALT_LT, 1);
+    c.text_centred(
+        cx,
+        h.y + 3,
+        if g.modern_touch {
+            "ONE THUMB: DRAG TO STEER"
+        } else {
+            "ARROWS STEER  DOWN BRAKE"
+        },
+        ASPHALT_LT,
+        1,
+    );
+    c.text_centred(
+        cx,
+        h.y + 12,
+        if g.modern_touch {
+            "UP DRIFT   DOWN BRAKE"
+        } else {
+            "SPACE OR SHIFT DRIFTS"
+        },
+        ASPHALT_LT,
+        1,
+    );
     c.rect(l.pad.x, l.pad.y, l.pad.w, l.pad.h, INK);
     // Buttons stay above the inset; the pad's background fills it.
     let p = l.controls;
@@ -146,6 +226,7 @@ fn title(g: &Game, c: &mut Canvas, art: &Art, l: &Layout) -> Vec<Button> {
     labelled(c, &mut out, daily, "DAILY", Action::Daily, false);
     labelled(c, &mut out, tracks, "TRACKS", Action::Tracks, false);
     labelled(c, &mut out, demo, "DEMO", Action::Demo, false);
+    settings_button(c, &mut out);
     out
 }
 
@@ -187,7 +268,13 @@ fn racing(g: &Game, c: &mut Canvas, art: &Art, l: &Layout) -> Vec<Button> {
     scene.ghost = g.ghost().map(|gh| (gh.car().z, gh.car().x));
     scene.ghost_note = g.ghost_note();
     let held = if g.paused { Held::default() } else { g.held };
-    render::race_frame(c, l, art, &g.decor, &scene, held);
+    if g.modern_touch {
+        render::road(c, l, art, &g.decor, &scene);
+        render::hud(c, l, &scene);
+        render::touch_pad(c, l, held, if g.paused { None } else { g.touch.gesture() });
+    } else {
+        render::race_frame(c, l, art, &g.decor, &scene, held);
+    }
     let mut out = Vec::new();
     if g.demo() {
         let w = crate::font::small_width("DEMO  TAP TO PLAY") as i32;
@@ -218,6 +305,7 @@ fn racing(g: &Game, c: &mut Canvas, art: &Art, l: &Layout) -> Vec<Button> {
             let f = Rect::new(r.x + 10, r.y + 118, r.w - 20, 34);
             labelled(c, &mut out, f, "FORK TRACK", Action::ForkTrack, false);
         }
+        settings_button(c, &mut out);
         return out;
     }
     // The pause button: top-left of the road view.
@@ -227,10 +315,14 @@ fn racing(g: &Game, c: &mut Canvas, art: &Art, l: &Layout) -> Vec<Button> {
     c.rect(pr.x + 9, pr.y + 3, 2, 8, WHITE);
     // Generous hit area: a thumb is bigger than the icon.
     button(&mut out, Rect::new(0, 0, 28, 24), Action::Pause);
-    button(&mut out, l.left, Action::Left);
-    button(&mut out, l.right, Action::Right);
-    button(&mut out, l.brake, Action::Brake);
-    button(&mut out, l.drift, Action::Drift);
+    if g.modern_touch {
+        button(&mut out, l.controls, Action::Drive);
+    } else {
+        button(&mut out, l.left, Action::Left);
+        button(&mut out, l.right, Action::Right);
+        button(&mut out, l.brake, Action::Brake);
+        button(&mut out, l.drift, Action::Drift);
+    }
     out
 }
 
@@ -720,7 +812,7 @@ mod tests {
         step(&mut g, vec![Event::Key(Key::Enter)]);
         let (c, b) = step(&mut g, vec![]);
         assert_eq!(g.mode, Mode::Racing);
-        assert!(has(&b, Action::Left) && has(&b, Action::Drift) && has(&b, Action::Pause));
+        assert!(has(&b, Action::Drive) && has(&b, Action::Pause));
         out.push(("racing_start", c));
         let (c, b) = step(&mut g, vec![Event::Back]);
         assert!(has(&b, Action::Resume) && !has(&b, Action::Left));
