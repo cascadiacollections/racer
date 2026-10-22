@@ -24,7 +24,7 @@ use godot::classes::notify::CanvasItemNotification;
 use godot::classes::{
     AudioStream, AudioStreamPlayer, DisplayServer, Engine, INode2D, Image, ImageTexture, Input,
     InputEvent, InputEventJoypadButton, InputEventKey, InputEventScreenDrag, InputEventScreenTouch,
-    Node2D, Os, ProjectSettings, ResourceLoader, Time,
+    Node2D, Os, ProjectSettings, RenderingServer, ResourceLoader, Time,
 };
 use godot::global::{JoyAxis, JoyButton, Key};
 use godot::obj::EngineEnum;
@@ -142,6 +142,9 @@ pub struct Racer {
     /// elsewhere. Set by `godot/platform_services.gd`.
     runs_dir: String,
     cap: i32,
+    /// The root viewport renders direct to the screen, which Godot draws
+    /// upside down, so the texture is drawn mirrored (`direct_to_screen`).
+    flip_y: bool,
     audio: Players,
     #[cfg(feature = "profiling")]
     profile: crate::profiling::Profile,
@@ -169,6 +172,7 @@ impl INode2D for Racer {
             platform_cap: 0,
             runs_dir: String::new(),
             cap: -1,
+            flip_y: false,
             audio: Players::default(),
             #[cfg(feature = "profiling")]
             profile: crate::profiling::Profile::default(),
@@ -177,6 +181,7 @@ impl INode2D for Racer {
 
     fn ready(&mut self) {
         self.project_cap = Engine::singleton().get_max_fps();
+        self.direct_to_screen();
         if let Some(text) = load_ghosts() {
             self.g.load_ghosts(&text);
             godot_print!("racer: {} ghosts loaded", self.g.ghosts().len());
@@ -219,7 +224,11 @@ impl INode2D for Racer {
             self.g.set_buttons(buttons);
             #[cfg(feature = "profiling")]
             self.profile.raster(raster.elapsed());
+            #[cfg(feature = "profiling")]
+            let upload = std::time::Instant::now();
             self.upload();
+            #[cfg(feature = "profiling")]
+            self.profile.upload(upload.elapsed());
         }
         #[cfg(feature = "profiling")]
         for line in self.profile.frame(delta, started.elapsed(), &self.g) {
@@ -253,9 +262,19 @@ impl INode2D for Racer {
     }
 
     fn draw(&mut self) {
-        if let Some(t) = self.texture.clone() {
-            self.base_mut().draw_texture(&t, Vector2::ZERO);
+        let Some(t) = self.texture.clone() else {
+            return;
+        };
+        if self.flip_y {
+            // Mirror the drawing (not the node, so input is unchanged): row
+            // y lands on row h - y.
+            let h = t.get_height() as f32;
+            self.base_mut()
+                .draw_set_transform_ex(Vector2::new(0.0, h))
+                .scale(Vector2::new(1.0, -1.0))
+                .done();
         }
+        self.base_mut().draw_texture(&t, Vector2::ZERO);
     }
 
     fn input(&mut self, event: Gd<InputEvent>) {
@@ -504,6 +523,41 @@ impl Racer {
 }
 
 impl Racer {
+    /// Draw the root viewport straight into the window's framebuffer when
+    /// the canvas fills the window. By default the Compatibility renderer
+    /// draws the canvas into a window-sized render target and then copies
+    /// that to the screen: two full-screen passes (2.5 Mpx each on a
+    /// 1080x2340 phone) for one scaled texture. Drawn direct, the copy pass
+    /// and its render target go (NOTES.md "Direct to screen").
+    ///
+    /// Godot 4.7.2's direct path has two quirks this works around. It draws
+    /// upside down (render targets are drawn flipped and the copy pass is
+    /// what flips them back), so `draw` mirrors the texture; the mirroring
+    /// is in the draw call, not the node, so input is untouched. And it
+    /// ignores the letterbox margin (the canvas lands in the bottom-left
+    /// corner), so it is only used while the stretched canvas has none:
+    /// called again whenever the window or the buffer changes size.
+    ///
+    /// Android only, where it was measured; desktops keep the copy (on
+    /// Windows, ANGLE already flips the screen).
+    fn direct_to_screen(&mut self) {
+        if !Os::singleton().has_feature("android") {
+            return;
+        }
+        let Some(window) = self.base().get_window() else {
+            return;
+        };
+        let direct = window.get_final_transform().origin == Vector2::ZERO;
+        if direct == self.flip_y {
+            return;
+        }
+        RenderingServer::singleton()
+            .viewport_set_render_direct_to_screen(window.get_viewport_rid(), direct);
+        self.flip_y = direct;
+        self.redraw.mark();
+        godot_print!("racer: direct to screen {direct}");
+    }
+
     /// Act on the developer flags (`cli.rs`): `--racer-season` forces a
     /// season on or off; `--racer-layout` starts a
     /// custom race on a code or a layout file. The layout is verified
@@ -654,6 +708,7 @@ impl Racer {
         if i.window != self.inset_for {
             self.inset_for = i.window;
             self.inset = bottom_inset_px(i.window);
+            self.direct_to_screen();
         }
         i.bottom_inset = self.inset;
         let t = Time::singleton();
@@ -685,6 +740,7 @@ impl Racer {
                     if let Some(mut window) = self.base().get_window() {
                         window.set_content_scale_size(Vector2i::new(w, h));
                     }
+                    self.direct_to_screen();
                     self.redraw.mark();
                 }
                 Effect::KeepScreenOn(on) => DisplayServer::singleton().screen_set_keep_on(on),

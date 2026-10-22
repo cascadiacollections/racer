@@ -63,8 +63,8 @@ Always build before launching Godot: the editor loads the extension from
 
 ### Device profiling
 
-Build with `just android-apk release profiling` to log raster, process and
-frame-interval means and p95s every two seconds of racing. In this build,
+Build with `just android-apk release profiling` to log raster, process,
+frame-interval and texture-upload means and p95s every two seconds of racing. In this build,
 `--racer-profile-seed=7` starts the same automated demo on every launch.
 For an Android export, temporarily set `command_line/extra_args` to that
 flag in the Android preset; restore the preset after exporting. Android's

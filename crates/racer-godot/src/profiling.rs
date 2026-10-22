@@ -2,7 +2,9 @@
 //! from every normal build).
 //!
 //! Every two seconds of racing, one log line: the raster (painting the
-//! canvas and laying out its buttons) mean and 95th percentile, the whole
+//! canvas and laying out its buttons) mean and 95th percentile, the upload
+//! (handing the canvas to the GPU: `Image::set_data` and
+//! `ImageTexture::update`, which re-specifies the texture), the whole
 //! `process` call, the frame interval the engine delivered and the fps it
 //! implies, plus where the car is (track, segment, CREST/DRIFT flags), so a
 //! screenshot can be timed from the log. On Android it lands in logcat
@@ -22,6 +24,7 @@ pub const WINDOW: f64 = 2.0;
 #[derive(Debug, Default)]
 pub struct Profile {
     raster: Stats,
+    upload: Stats,
     process: Stats,
     interval: Stats,
     clock: f64,
@@ -40,6 +43,11 @@ impl Profile {
     /// One raster pass took `d`.
     pub fn raster(&mut self, d: Duration) {
         self.raster.push(ms(d));
+    }
+
+    /// One texture upload took `d`.
+    pub fn upload(&mut self, d: Duration) {
+        self.upload.push(ms(d));
     }
 
     /// A frame ended. Returns the lines to log: a `racer-event` when a
@@ -72,6 +80,7 @@ impl Profile {
     fn summary(&mut self, delta: f64, process: Duration, g: &Game) -> Option<String> {
         if g.mode != Mode::Racing || g.paused {
             self.raster.clear();
+            self.upload.clear();
             self.process.clear();
             self.interval.clear();
             self.clock = 0.0;
@@ -102,7 +111,7 @@ impl Profile {
         let line = format!(
             "racer-prof: raster mean {:.3} p95 {:.3} ms | process mean {:.3} p95 {:.3} ms | \
              frame mean {:.2} p95 {:.2} ms, {:.1} fps | n {} | track {} seg {} curve {} \
-             elev {:.1}{}",
+             elev {:.1}{} | upload mean {:.3} p95 {:.3} ms",
             self.raster.mean(),
             self.raster.percentile(95.0),
             self.process.mean(),
@@ -115,9 +124,12 @@ impl Profile {
             i,
             seg.curve_milli,
             t.elevation_at(car.z),
-            tags
+            tags,
+            self.upload.mean(),
+            self.upload.percentile(95.0)
         );
         self.raster.clear();
+        self.upload.clear();
         self.process.clear();
         self.interval.clear();
         self.clock = 0.0;
