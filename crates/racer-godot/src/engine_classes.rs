@@ -34,6 +34,7 @@ pub const REQUIRED: &[&str] = &[
     "InputEventScreenTouch",
     "Node2D",
     "ProjectSettings",
+    "RenderingServer",
     "ResourceLoader",
     "Time",
     // Reached without being named: the scene tree and window the node lives

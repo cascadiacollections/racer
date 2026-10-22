@@ -627,3 +627,75 @@ GHOST COVE, HAUNTED PINES, BLOOD MOON MESA, MONSTER CITY.
   without a speaker: they need ears.
 - Not tried on a phone: whether the bats read at the Pixel's density and
   how dark the twins' night skies look on its panel.
+
+## Direct to screen and the A16 profile (2026-10-22)
+
+Galaxy A16 5G (SM-A166U1, Exynos 1330, Mali-G68 MP2, 1080×2340 at 90 Hz,
+Android 16), on AC, thermal status 0. Release + `--features profiling`
+exports of the pinned stripped engine (4.7.2), installed as a separate
+`com.cascadiacollections.racer.profile` package so the phone's own install was
+not touched, `--racer-profile-seed=7` (Halloween season, PUMPKIN PATCH),
+80 s captures alternating baseline and candidate, track 1 segments 20–400
+(about 3,600 frames each), as in #23.
+
+**Where the time goes** (baseline, per frame; the frame budget is 11.1 ms):
+
+- `process` 1.03 ms: texture upload 0.56 ms (`Image::set_data` and
+  `ImageTexture::update`, which re-specifies the texture with
+  `glTexImage2D`; the Mali driver then converts the 280 KB from linear to its
+  block layout on the CPU), raster 0.39 ms, sim, bot and the rest about
+  0.09 ms.
+- simpleperf, GL thread: `Racer::process` 31% of its cycles (raster 12%,
+  upload 10% plus 3% building the `PackedByteArray`), the rest is the engine
+  and the driver: `eglSwapBuffers` 25%, `glFenceSync` flushes 9%, the copy
+  pass's `glDrawArrays` 16%.
+- GPU: about 79% busy at about 330 MHz. The Compatibility renderer drew the
+  canvas into a 1080×2340 render target, then copied that to the screen: two
+  full-screen passes for one scaled 180×390 texture.
+- Memory: PSS 166 MB, of which graphics 91 MB.
+- Startup (`am start -W` TotalTime, warm install): 290–340 ms.
+- Track builds (the `batch` bin on the phone, one thread, 8 seeds × 9
+  tracks): 291 ms mean, 1.74 s max; track 5 730 ms mean (tablet 2.0 s). The
+  daily's 9-track prebuild is a few seconds on two workers.
+- Determinism: `0x4a5c1bcc8fc9fdfb` on the phone, equal to the host.
+- Pacing: 90.0 fps; 0–2 latches per 30 s more than 1.5 vsyncs apart and
+  none over 2.5 (SurfaceFlinger `setLatchTime` intervals), the same with the
+  change.
+
+**Change.** The root viewport renders straight into the window
+(`RenderingServer::viewport_set_render_direct_to_screen`), dropping the
+render target and the copy pass. Godot 4.7.2's direct path draws upside down
+and ignores the letterbox margin (its canvas `glViewport` starts at 0,0), so
+the node mirrors its one texture in `draw` and uses the direct path only
+while the stretched canvas has no margin (`Window::get_final_transform`
+origin at zero, rechecked when the window or buffer changes). Android only.
+Letterboxed screens keep the copy: checked on the A16 at `wm size 1080x2424`
+(direct off, picture identical to the baseline's, 12-row bars).
+
+| A16, 7 runs each (mean) | Baseline | Direct | Change |
+| --- | ---: | ---: | ---: |
+| Frame interval | 11.112 ms | 11.113 ms | none (90.0 fps) |
+| GPU busy × clock | 263 MHz | 218 MHz | −17% |
+| GPU busy / clock | 79% / 332 MHz | 71% / 308 MHz | |
+| PSS | 166 MB | 126 MB | −40 MB (−24%) |
+| Graphics memory | 91 MB | 58 MB | −33 MB |
+| Raster mean | 0.386 ms | 0.389 ms | none |
+| Upload mean (3 runs) | 0.561 ms | 0.652 ms | +0.09 ms |
+| `process` mean | 1.031 ms | 1.117 ms | +0.09 ms |
+| `process` p95 (window mean) | 1.26 ms | 1.49 ms | +0.23 ms |
+
+The upload takes longer in wall time because the CPU runs slower, not because
+it does more: in Perfetto (3 captures each; one baseline capture with a
+busy phone left out) the GL thread ran on the big cores throughout, at a
+mean 615–726 MHz against 827–941 MHz on the baseline, with about 17% fewer
+frequency-weighted cycles per frame (the whole app about 13%); system-wide,
+big-cluster cycles fell from about 0.74 to 0.46 G/s. `eglSwapBuffers` now
+blocks longer (3.2 ms mean, was 1.2) because the window buffer is the only
+target; display latching is unchanged.
+
+Tried and dropped: two textures uploaded in turn (so an upload never
+re-specifies the texture the GPU may still read) cut the upload by about
+0.02 ms, inside the noise. Not tried: uploading palette indices (8-bit, a
+quarter of the bytes and of the driver's conversion) with a palette-lookup
+canvas shader; the upload is the largest CPU item left, but it needs the
+canvas to keep indices and a shader on the stripped engine.
