@@ -238,6 +238,10 @@ jobs:
       # the generator no longer makes is a hand edit or a stale run.
       - name: generated audio is up to date
         run: python3 tools/gen_audio.py --check
+      # tools/ is standard library only, so there is no lockfile to pin ty in;
+      # the exact version here keeps new ty releases from failing unrelated PRs.
+      - name: type check the Python tools
+        run: pipx run ty==0.0.91 check --output-format github tools
 
   deny:
     name: cargo-deny
