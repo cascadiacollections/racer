@@ -167,3 +167,7 @@ android-log:
 screen name:
     mkdir -p target/screens && touch target/screens/.gdignore
     "{{ adb }}" exec-out screencap -p > target/screens/{{ name }}.png
+
+# Signed archive; add --upload to distribute to internal TestFlight testers.
+testflight *args:
+    python3 tools/testflight.py {{ args }}
