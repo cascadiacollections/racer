@@ -30,11 +30,12 @@ use godot::global::{JoyAxis, JoyButton, Key};
 use godot::obj::EngineEnum;
 use godot::prelude::*;
 
-use crate::app::{Effect, Game};
+use crate::app::{Effect, Game, Mode};
 use crate::audio::{Loops, Sfx, Tune, AMBIENT_FILE, DRIFT_FILE, ENGINE_FILE};
 use crate::builder::{generate, worker_count, Worker};
 use crate::frame::{frame_cap, tighter_cap, Redraw};
 use crate::input::{self, Event, Intents};
+use crate::perf;
 use crate::raster::Canvas;
 use crate::screens;
 use crate::sprites::Art;
@@ -148,6 +149,19 @@ pub struct Racer {
     audio: Players,
     #[cfg(feature = "profiling")]
     profile: crate::profiling::Profile,
+    /// When this frame's `process` began, to time the frame (`perf`).
+    frame_started: Option<std::time::Instant>,
+    device_reads: perf::DeviceReads,
+    /// The debug frame-time overlay (`perf::Hud`); absent from release
+    /// builds, and until `ready`.
+    #[cfg(debug_assertions)]
+    hud: Option<perf::Hud>,
+    /// Show the overlay: on a phone, or with `--racer-perf` or
+    /// `--racer-bench`.
+    #[cfg(debug_assertions)]
+    hud_shown: bool,
+    /// `--racer-bench`: the soak benchmark, while it runs.
+    bench: Option<perf::Bench>,
 }
 
 #[godot_api]
@@ -176,6 +190,13 @@ impl INode2D for Racer {
             audio: Players::default(),
             #[cfg(feature = "profiling")]
             profile: crate::profiling::Profile::default(),
+            frame_started: None,
+            device_reads: perf::DeviceReads::default(),
+            #[cfg(debug_assertions)]
+            hud: None,
+            #[cfg(debug_assertions)]
+            hud_shown: false,
+            bench: None,
         }
     }
 
@@ -204,8 +225,15 @@ impl INode2D for Racer {
     }
 
     fn process(&mut self, delta: f64) {
-        #[cfg(feature = "profiling")]
         let started = std::time::Instant::now();
+        let frame_ms = self
+            .frame_started
+            .replace(started)
+            .map(|then| (started - then).as_secs_f64() * 1000.0);
+        if self.bench.is_some() && matches!(self.g.mode, Mode::Title | Mode::Results) {
+            // The benchmark drives the same seed again whenever a run ends.
+            self.g.start_seed(perf::BENCH_SEED, true);
+        }
         self.gather();
         let fx = self.g.tick(delta, &self.intents);
         self.apply(fx);
@@ -217,7 +245,8 @@ impl INode2D for Racer {
             Engine::singleton().set_max_fps(cap);
             self.cap = cap;
         }
-        if self.redraw.due(self.g.busy()) {
+        let rendered = self.redraw.due(self.g.busy());
+        if rendered {
             #[cfg(feature = "profiling")]
             let raster = std::time::Instant::now();
             let buttons = screens::frame(&mut self.g, &mut self.canvas, &self.art);
@@ -234,9 +263,13 @@ impl INode2D for Racer {
         for line in self.profile.frame(delta, started.elapsed(), &self.g) {
             godot_print!("{line}");
         }
+        if let Some(frame_ms) = frame_ms {
+            self.measure(frame_ms, started.elapsed(), rendered, delta);
+        }
     }
 
     fn exit_tree(&mut self) {
+        self.end_bench("closed");
         // Stop every voice while the audio driver is still running. Godot
         // schedules a fade-out on the mixer thread rather than releasing
         // playback synchronously (godotengine/godot#95484).
@@ -344,6 +377,9 @@ impl INode2D for Racer {
             CanvasItemNotification::WM_WINDOW_FOCUS_OUT
             | CanvasItemNotification::APPLICATION_FOCUS_OUT
             | CanvasItemNotification::APPLICATION_PAUSED => {
+                if what == CanvasItemNotification::APPLICATION_PAUSED {
+                    self.end_bench("paused");
+                }
                 self.events.clear();
                 let fx = self.g.focus_lost();
                 self.apply(fx);
@@ -426,6 +462,59 @@ fn store_layouts_file(name: &str, text: Option<&str>) -> bool {
     done.is_ok()
 }
 
+impl Racer {
+    /// One frame's timing, for the overlay and the benchmark (`perf`). The
+    /// monitors read here (draw calls, video memory) describe the frame the
+    /// renderer last finished, one behind the one just processed.
+    fn measure(&mut self, frame_ms: f64, process: std::time::Duration, rendered: bool, delta: f64) {
+        #[cfg(not(debug_assertions))]
+        if self.bench.is_none() {
+            return;
+        }
+        let mut sample = perf::Sample::read(frame_ms, process.as_secs_f64() * 1000.0, rendered);
+        self.device_reads.fill(&mut sample);
+        #[cfg(debug_assertions)]
+        if let Some(hud) = self.hud.as_mut() {
+            hud.update(self.hud_shown, &sample, delta);
+        }
+        #[cfg(not(debug_assertions))]
+        let _ = delta;
+        if let Some(bench) = self.bench.as_mut() {
+            bench.record(sample);
+            if bench.finish_if_due() {
+                self.end_bench("done");
+                // iOS ignores `SceneTree::quit`; the file is written, so the
+                // process can go.
+                if cfg!(target_os = "ios") {
+                    std::process::exit(0);
+                }
+                self.base().get_tree().quit();
+            }
+        }
+    }
+
+    /// Write the benchmark's frames, if one is running, and stop it. `why`
+    /// names the file: `done` for a full run, `paused` or `closed` for one
+    /// cut short, which is still worth reading.
+    fn end_bench(&mut self, why: &str) {
+        let Some(bench) = self.bench.take() else {
+            return;
+        };
+        self.g.fixed_forks = false;
+        godot_print!("{}", bench.summary_line());
+        let stamp = Time::singleton().get_unix_time_from_system() as u64;
+        let path = user_path(&format!("bench/bench-{stamp}-{why}.csv"));
+        match write_atomic(&path, &bench.csv()) {
+            Ok(()) => {
+                godot_print!("racer-bench: wrote {}", path.display());
+            }
+            Err(e) => {
+                godot_warn!("racer-bench: could not write {}: {e}", path.display());
+            }
+        }
+    }
+}
+
 /// `user://<name>` as a filesystem path.
 fn user_path(name: &str) -> std::path::PathBuf {
     let dir = ProjectSettings::singleton()
@@ -475,27 +564,26 @@ fn save_ghosts(text: &str) {
     }
 }
 
-/// Density-independent pixels Android's gesture navigation keeps at the
-/// bottom of the screen (Pixel 10: 84 px at 420 dpi).
-const GESTURE_DP: i32 = 32;
-
-/// Screen pixels at the bottom of a `win` window that touches must avoid.
-/// On a phone, the larger of the display's safe area (a cutout or bar at
-/// the bottom) and the gesture area, which the safe area does not cover; on
-/// a desktop, none.
+/// Screen pixels at the bottom of a `win` window that touches must avoid
+/// (`layout::bottom_inset_px`); on a desktop, none.
 fn bottom_inset_px(win: (i32, i32)) -> i32 {
-    if !Os::singleton().has_feature("mobile") {
+    let os = Os::singleton();
+    if !os.has_feature("mobile") {
         return 0;
     }
     let ds = DisplayServer::singleton();
     let safe = ds.get_display_safe_area();
     let safe_gap = if safe.size.y > 0 {
-        (win.1 - safe.position.y - safe.size.y).clamp(0, win.1 / 4)
+        win.1 - safe.position.y - safe.size.y
     } else {
         0
     };
-    let gesture = GESTURE_DP * ds.screen_get_dpi().max(160) / 160;
-    safe_gap.max(gesture)
+    crate::layout::bottom_inset_px(
+        win.1,
+        safe_gap,
+        ds.screen_get_dpi(),
+        os.has_feature("android"),
+    )
 }
 
 #[godot_api]
@@ -582,6 +670,24 @@ impl Racer {
             self.g.start_seed(seed, true);
         }
         let dev = crate::cli::DevArgs::parse(&args);
+        if dev.bench {
+            let seconds = dev.bench_seconds.unwrap_or(perf::BENCH_SECONDS);
+            self.g.fixed_forks = true;
+            self.g.start_seed(perf::BENCH_SEED, true);
+            self.bench = Some(perf::Bench::new(seconds));
+            godot_print!(
+                "racer-bench: starting; seed={} seconds={seconds:.0} renderer={}",
+                perf::BENCH_SEED,
+                RenderingServer::singleton().get_current_rendering_method()
+            );
+        }
+        #[cfg(debug_assertions)]
+        {
+            self.hud_shown = dev.perf || dev.bench || Os::singleton().has_feature("mobile");
+            let (hud, layer) = perf::Hud::new();
+            self.base_mut().add_child(&layer);
+            self.hud = Some(hud);
+        }
         if let Some(season) = dev.season {
             godot_print!("racer: --racer-season: {season:?}");
             self.g.forced_season = Some(season);

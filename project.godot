@@ -60,9 +60,18 @@ pointing/emulate_touch_from_mouse=true
 
 [rendering]
 
-; One textured quad a frame needs nothing more; phones use it too.
+; One textured quad a frame needs nothing more; Android uses it too (keyed
+; to `android`, not `mobile`, so exactly one override matches on a phone).
 renderer/rendering_method="gl_compatibility"
-renderer/rendering_method.mobile="gl_compatibility"
+renderer/rendering_method.android="gl_compatibility"
+; iOS profiles the Mobile renderer (Metal) on the low-end floor, the iPhone SE
+; 2nd gen (docs/profiling-ios.md). Compatibility stays one switch away: launch
+; with `--rendering-method gl_compatibility` (`just ios-launch`), or set this
+; line to "gl_compatibility" to ship it. Compare the two with `--racer-bench`
+; before choosing.
+renderer/rendering_method.ios="mobile"
+; If Metal cannot start, run on OpenGL ES (Compatibility) instead of failing.
+rendering_device/fallback_to_opengl3=true
 textures/canvas_textures/default_texture_filter=0
 ; Android export refuses to run without an ETC2/ASTC path. Nothing here is
 ; VRAM-compressed: the game's one texture is made at runtime.

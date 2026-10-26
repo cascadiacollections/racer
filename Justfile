@@ -171,3 +171,75 @@ screen name:
 # Signed archive; add --upload to distribute to internal TestFlight testers.
 testflight *args:
     python3 tools/testflight.py {{ args }}
+
+# iOS (arm64), as in Salt Line. macOS only. Needs Xcode signed in to the developer account
+# (Settings > Accounts), rustup, Godot 4.7.2's export templates, and the Team ID in the iOS
+# preset (application/app_store_team_id; IOS_TEAM overrides it). xcodebuild signs with
+# automatic provisioning, which also registers the phone; devicectl installs and launches.
+# IOS_DEVICE picks the phone (a name or UDID; `xcrun devicectl list devices`).
+
+# The iOS preset's application/min_ios_version; the library is built for the same floor.
+ios_min := "16.0"
+
+# Build the GDExtension for iOS.
+ios-lib profile="debug":
+    rustup target add aarch64-apple-ios
+    IPHONEOS_DEPLOYMENT_TARGET={{ ios_min }} {{ cargo }} build -p racer-godot \
+        --target aarch64-apple-ios {{ if profile == "release" { "--release" } else { "" } }}
+
+# Export the Xcode project to build/ios (open build/ios/Racer.xcodeproj to run from Xcode).
+ios-project profile="debug": build (ios-lib profile)
+    #!/usr/bin/env bash
+    set -euo pipefail
+    rm -rf build/ios && mkdir -p build/ios
+    bash tools/godot_headless.sh --frame-delay 800 --import
+    bash tools/godot_headless.sh --export-{{ profile }} "iOS" build/ios/Racer.ipa
+    test -d build/ios/Racer.xcodeproj
+    # Godot emits empty usage strings for permissions racer never asks for.
+    info=build/ios/Racer/Racer-Info.plist
+    for key in NSCameraUsageDescription NSMicrophoneUsageDescription NSPhotoLibraryUsageDescription; do
+        plutil -remove "$key" "$info" 2>/dev/null || true
+    done
+    # Godot skips a missing extension library without a word; the app then starts empty.
+    if ! find build/ios -name 'libracer_godot.framework' | grep -q .; then
+        echo "error: the export has no libracer_godot.framework; is target/aarch64-apple-ios built?" >&2
+        exit 1
+    fi
+
+# Sign, install and launch on the iPhone. `just ios release` for the optimised build.
+ios profile="debug": (ios-project profile)
+    #!/usr/bin/env bash
+    set -euo pipefail
+    team="${IOS_TEAM:-$(sed -n 's/^application\/app_store_team_id="\(.*\)"$/\1/p' export_presets.cfg)}"
+    device="${IOS_DEVICE:?set IOS_DEVICE to the iPhone name or UDID}"
+    # Stage outside any file-provider folder: copied frameworks pick up FinderInfo there,
+    # which codesign rejects.
+    stage=$(mktemp -d "${TMPDIR:-/tmp}/racer-ios.XXXXXX")
+    trap 'rm -rf "$stage"' EXIT
+    mkdir -p "$stage/project" "$stage/out"
+    rsync -a build/ios/ "$stage/project/"
+    xattr -cr "$stage"
+    config={{ if profile == "release" { "Release" } else { "Debug" } }}
+    xcodebuild -project "$stage/project/Racer.xcodeproj" -configuration "$config" -sdk iphoneos \
+        -allowProvisioningUpdates DEVELOPMENT_TEAM="$team" CODE_SIGN_STYLE=Automatic \
+        COMPILER_INDEX_STORE_ENABLE=NO SYMROOT="$stage/out" -quiet build
+    xcrun devicectl device install app --device "$device" "$(ls -d "$stage/out/$config-iphoneos"/*.app | head -1)"
+    xcrun devicectl device process launch --device "$device" {{ package }}
+
+# E.g. `just ios-launch --racer-perf` or `just ios-launch --rendering-method gl_compatibility`.
+# Launch the installed app on the iPhone with developer flags, streaming its log.
+ios-launch *args:
+    xcrun devicectl device process launch --console --terminate-existing \
+        --device "${IOS_DEVICE:?set IOS_DEVICE to the iPhone name or UDID}" {{ package }} {{ args }}
+
+# renderer is mobile or gl_compatibility; the CSV lands in the app's Documents/bench.
+# Soak benchmark on the iPhone (docs/profiling-ios.md): `just ios release` first, then this.
+ios-bench seconds="300" renderer="mobile":
+    just ios-launch --rendering-method {{ renderer }} --racer-bench --racer-bench-seconds {{ seconds }}
+
+# Copy the benchmark CSVs off the iPhone into build/bench.
+ios-bench-pull:
+    mkdir -p build/bench
+    xcrun devicectl device copy from --device "${IOS_DEVICE:?set IOS_DEVICE to the iPhone name or UDID}" \
+        --domain-type appDataContainer --domain-identifier {{ package }} \
+        --source Documents/bench --destination build/bench
