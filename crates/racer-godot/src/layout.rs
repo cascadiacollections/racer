@@ -141,9 +141,62 @@ pub fn inset_rows(px: i32, win_h: i32, h: i32) -> i32 {
     ((px as i64 * h as i64 + win_h as i64 - 1) / win_h as i64) as i32
 }
 
+/// Density-independent pixels Android's gesture navigation keeps at the
+/// bottom of the screen (Pixel 10: 84 px at 420 dpi).
+pub const GESTURE_DP: i32 = 32;
+
+/// Screen pixels at the bottom of a window `win_h` tall that touches must
+/// avoid, given how far the display's safe area stops short of the bottom
+/// (`safe_gap`, 0 when it reaches it) and the screen's `dpi`.
+///
+/// On Android, the larger of the safe-area gap and the gesture area, which
+/// the safe area does not cover. On iOS the safe area already includes the
+/// home indicator on phones that have one, and a home-button phone (the
+/// iPhone SE) has no gesture area at all, so the gap alone: adding
+/// Android's allowance there would cost the road 16 rows for nothing.
+pub fn bottom_inset_px(win_h: i32, safe_gap: i32, dpi: i32, android: bool) -> i32 {
+    let safe_gap = safe_gap.clamp(0, win_h.max(0) / 4);
+    if !android {
+        return safe_gap;
+    }
+    safe_gap.max(GESTURE_DP * dpi.max(160) / 160)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The iPhone SE (2nd gen), the low-end iOS profiling floor: 750 by 1334
+    /// portrait, 16:9, a home button and no notch. It makes the shortest
+    /// buffer with nothing reserved at the bottom.
+    #[test]
+    fn an_iphone_se_gets_the_shortest_buffer_and_no_inset() {
+        assert_eq!(buffer_size((750, 1334)), (W, H_MIN));
+        let inset = bottom_inset_px(1334, 0, 326, false);
+        assert_eq!(inset, 0, "no gesture area, no home indicator");
+        let l = Layout::with_inset(H_MIN, inset_rows(inset, 1334, H_MIN));
+        assert_eq!((l.inset, l.bottom()), (0, H_MIN));
+        assert_eq!(l.road.h, H_MIN - HUD_H - PAD_H);
+        for r in [l.left, l.right, l.brake, l.drift] {
+            assert!(
+                r.x >= 0 && r.x + r.w <= W && r.y + r.h <= l.bottom(),
+                "{r:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_android_adds_the_gesture_area() {
+        // Pixel 10: no safe-area gap, the gesture area alone.
+        assert_eq!(bottom_inset_px(2424, 0, 420, true), 84);
+        // A Face ID iPhone: the home indicator is in the safe area (34 pt at
+        // 3x), and that is all.
+        assert_eq!(bottom_inset_px(2556, 102, 460, false), 102);
+        // A gap bigger than the gesture area wins on Android too, capped at
+        // a quarter of the window.
+        assert_eq!(bottom_inset_px(2400, 120, 420, true), 120);
+        assert_eq!(bottom_inset_px(400, 300, 160, false), 100);
+    }
 
     #[test]
     fn height_floats_with_aspect_and_is_clamped() {

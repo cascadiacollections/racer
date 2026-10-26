@@ -475,27 +475,26 @@ fn save_ghosts(text: &str) {
     }
 }
 
-/// Density-independent pixels Android's gesture navigation keeps at the
-/// bottom of the screen (Pixel 10: 84 px at 420 dpi).
-const GESTURE_DP: i32 = 32;
-
-/// Screen pixels at the bottom of a `win` window that touches must avoid.
-/// On a phone, the larger of the display's safe area (a cutout or bar at
-/// the bottom) and the gesture area, which the safe area does not cover; on
-/// a desktop, none.
+/// Screen pixels at the bottom of a `win` window that touches must avoid
+/// (`layout::bottom_inset_px`); on a desktop, none.
 fn bottom_inset_px(win: (i32, i32)) -> i32 {
-    if !Os::singleton().has_feature("mobile") {
+    let os = Os::singleton();
+    if !os.has_feature("mobile") {
         return 0;
     }
     let ds = DisplayServer::singleton();
     let safe = ds.get_display_safe_area();
     let safe_gap = if safe.size.y > 0 {
-        (win.1 - safe.position.y - safe.size.y).clamp(0, win.1 / 4)
+        win.1 - safe.position.y - safe.size.y
     } else {
         0
     };
-    let gesture = GESTURE_DP * ds.screen_get_dpi().max(160) / 160;
-    safe_gap.max(gesture)
+    crate::layout::bottom_inset_px(
+        win.1,
+        safe_gap,
+        ds.screen_get_dpi(),
+        os.has_feature("android"),
+    )
 }
 
 #[godot_api]
