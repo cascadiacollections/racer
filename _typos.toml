@@ -10,3 +10,5 @@ extend-ignore-re = ['"[0-9A-Z]{30,}"']
 [default.extend-words]
 # A right-hander or left-hander is a bend, not a misspelt handler.
 hander = "hander"
+# Apple's Unique Device Identifier, not a misspelt UUID.
+UDID = "UDID"
