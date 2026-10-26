@@ -254,6 +254,10 @@ pub struct Game {
     /// A season forced on or off by `--racer-season` (DESIGN §5.2),
     /// whatever today is.
     pub forced_season: Option<Season>,
+    /// `--racer-bench`: the demo picks each fork from the seed and the
+    /// track index alone, not the clock, so every benchmark drives the same
+    /// tracks whatever the frame pacing.
+    pub fixed_forks: bool,
 }
 
 /// Seconds the title shows each biome before the next.
@@ -333,6 +337,7 @@ impl Game {
             daily: None,
             daily_record: DailyRecord::default(),
             forced_season: None,
+            fixed_forks: false,
         }
     }
 
@@ -1127,7 +1132,11 @@ impl Game {
         }
         let pick = if let Some(d) = &mut self.demo {
             d.fork_wait -= delta;
-            (d.fork_wait <= 0.0).then(|| (mix64(self.seed ^ self.clock.to_bits()) & 1) as u8)
+            let salt = match (&self.run, self.fixed_forks) {
+                (Some(run), true) => u64::from(run.index()),
+                _ => self.clock.to_bits(),
+            };
+            (d.fork_wait <= 0.0).then(|| (mix64(self.seed ^ salt) & 1) as u8)
         } else if self.touch.pressed(Action::PickEasy) {
             Some(0)
         } else if self.touch.pressed(Action::PickHard) {

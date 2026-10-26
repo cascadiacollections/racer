@@ -48,6 +48,7 @@ pub mod game;
 pub mod input;
 pub mod layout;
 pub mod palette;
+pub mod perf;
 #[cfg(feature = "profiling")]
 pub mod profiling;
 pub mod project;
