@@ -107,6 +107,11 @@ android-template:
 godot-template *args:
     ANDROID_HOME="{{ android_sdk }}" python3 tools/godot_template.py build {{ args }}
 
+# Opt-in Godot 4.8-beta2 trial. Does not change the 4.7.2 pin, the lock, or
+# the api-4-7 feature (docs/godot-48-trial.md).
+godot-48-trial *args:
+    python3 tools/godot_48_trial.py run {{ args }}
+
 # Export the APK to build/racer.apk: a debug export, or with
 # profile=release a release export signed with the same debug key. A Gradle
 # build: run `just android-template` once first.

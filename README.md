@@ -47,7 +47,8 @@ follows `main`.
 Needs Rust (the toolchain is pinned in `rust-toolchain.toml`; rustup picks it
 up), Godot `4.7.2` on `PATH` as `godot`, and [`just`](https://just.systems).
 The `godot` crate is built against the `api-4-7` feature; raise it together
-with the engine.
+with the engine. An opt-in trial of Godot 4.8 beta 2 leaves that pin where
+it is: `just godot-48-trial` ([docs/godot-48-trial.md](docs/godot-48-trial.md)).
 
 ```bash
 just test      # unit, property, snapshot and golden-run tests; no Godot needed
@@ -215,7 +216,8 @@ records the decisions and measurements behind its numbers.
   (`gh attestation verify`).
 
 `godot-templates.yml` builds the stripped engine when its inputs change on
-`main`; `pages.yml` builds the project page (below).
+`main`; `pages.yml` builds the project page (below). The **godot 4.8-beta2
+trial** job is allow-failure and is not required for the dev release.
 
 ## Site
 
