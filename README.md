@@ -239,6 +239,26 @@ deploying is off. To publish it: enable Pages with GitHub Actions as the source
 (`gh api -X POST repos/cascadiacollections/racer/pages -f build_type=workflow`),
 then set the repository variable `PAGES_DEPLOY=on`.
 
+## Editions
+
+One codebase builds two editions. `crates/racer-godot/src/tier.rs` is the only place they differ.
+
+| Edition | Runs | TRACKS list and editor |
+|---|---|---|
+| Full (paid store builds) | All five tracks | Yes |
+| Shareware (free) | End at the fork after track 2, saved and scored as far as they went | No. Shared layouts (`--racer-layout`) still race |
+
+The simulation never sees the tier. Tracks depend only on `(run_seed, index, branch)`, so a seed
+drives the same roads in both editions up to the cap. The `Linux Shareware` and `Android
+Shareware` presets are copies of the full ones with the `shareware` custom feature and a
+`.shareware` application ID. Keep their versions in step with the full presets. CI's dev
+versioning rewrites both.
+
+```bash
+just run-shareware               # play the shareware edition locally
+just export-shareware Linux      # or Android -> build/shareware/
+```
+
 ## Licensing
 
 racer is MIT ([LICENSE](LICENSE)). It ships with:

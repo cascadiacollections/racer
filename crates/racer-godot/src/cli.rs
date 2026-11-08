@@ -30,6 +30,9 @@ pub struct DevArgs {
     /// `--racer-bench-seconds <s>`: how long `--racer-bench` runs;
     /// `perf::BENCH_SECONDS` when absent or not a positive number.
     pub bench_seconds: Option<f64>,
+    /// `--racer-shareware`: run as the shareware edition (`tier.rs`), as an
+    /// export with the `shareware` feature does.
+    pub shareware: bool,
 }
 
 impl DevArgs {
@@ -45,6 +48,7 @@ impl DevArgs {
             bench_seconds: value(args, "--racer-bench-seconds")
                 .and_then(|v| v.parse().ok())
                 .filter(|s: &f64| s.is_finite() && *s > 0.0),
+            shareware: flag(args, "--racer-shareware"),
         }
     }
 }
@@ -115,5 +119,11 @@ mod tests {
         assert!(!b.bench && !b.perf);
         assert_eq!(b.bench_seconds, None);
         assert_eq!(DevArgs::parse(&[]), DevArgs::default());
+    }
+
+    #[test]
+    fn the_shareware_flag_parses() {
+        assert!(DevArgs::parse(&args("--racer-shareware")).shareware);
+        assert!(!DevArgs::parse(&args("")).shareware);
     }
 }

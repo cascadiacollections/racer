@@ -16,6 +16,27 @@ run *args: build
     bash tools/godot_headless.sh --frame-delay 800 --import
     godot --path . {{ args }}
 
+# Play the free shareware edition (crates/racer-godot/src/tier.rs): runs end after 2 tracks; no TRACKS/editor.
+run-shareware: build
+    bash tools/godot_headless.sh --frame-delay 800 --import
+    godot --path . -- --racer-shareware
+
+# Export the shareware edition: "Linux" or "Android" (debug-signed). Writes build/shareware/.
+export-shareware platform="Linux":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{ platform }}" in
+        Linux) out=racer-shareware.x86_64; {{ cargo }} build --release -p racer-godot ;;
+        Android) out=racer-shareware.apk; just android-lib release ;;
+        *) echo "error: no shareware preset for '{{ platform }}'" >&2; exit 2 ;;
+    esac
+    mkdir -p build/shareware
+    bash tools/godot_headless.sh --frame-delay 800 --import
+    bash tools/godot_headless.sh --export-release "{{ platform }} Shareware" "build/shareware/$out"
+    # --export-release has been known to exit 0 having written nothing.
+    test -e "build/shareware/$out" || { echo "error: export wrote nothing" >&2; exit 1; }
+    echo "build/shareware/$out"
+
 # Unit, property, snapshot and golden-run tests.
 test:
     cargo test --workspace
