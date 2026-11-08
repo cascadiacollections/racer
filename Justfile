@@ -21,13 +21,14 @@ run-shareware: build
     bash tools/godot_headless.sh --frame-delay 800 --import
     godot --path . -- --racer-shareware
 
-# Export the shareware edition: "Linux" or "Android" (debug-signed). Writes build/shareware/.
+# Android Shareware is a release export signed with the debug key, as android-apk does (run `just android-template` once first).
+# Export the shareware edition: "Linux" or "Android". Writes build/shareware/.
 export-shareware platform="Linux":
     #!/usr/bin/env bash
     set -euo pipefail
     case "{{ platform }}" in
         Linux) out=racer-shareware.x86_64; {{ cargo }} build --release -p racer-godot ;;
-        Android) out=racer-shareware.apk; just android-lib release ;;
+        Android) exec just android-apk release "" "Android Shareware" ;;
         *) echo "error: no shareware preset for '{{ platform }}'" >&2; exit 2 ;;
     esac
     mkdir -p build/shareware
@@ -135,8 +136,9 @@ godot-48-trial *args:
 
 # Export the APK to build/racer.apk: a debug export, or with
 # profile=release a release export signed with the same debug key. A Gradle
-# build: run `just android-template` once first.
-android-apk profile="debug" features="": build (android-lib profile features)
+# build: run `just android-template` once first. preset="Android Shareware"
+# exports the shareware edition to build/shareware/racer-shareware.apk.
+android-apk profile="debug" features="" preset="Android": build (android-lib profile features)
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p build && touch build/.gdignore
@@ -152,9 +154,11 @@ android-apk profile="debug" features="": build (android-lib profile features)
     # Re-select the engine on every release export, so a lock change (or
     # STRIPPED_ENGINE=off) takes effect without re-unpacking the template.
     {{ if profile == "release" { "python3 tools/godot_template.py engine" } else { "" } }}
-    bash tools/godot_headless.sh --export-{{ profile }} "Android" build/racer.apk
-    ls -l build/racer.apk
-    unzip -lv build/racer.apk 'lib/*/libgodot_android.so' | tail -n +4 | head -n 1
+    apk={{ if preset == "Android" { "build/racer.apk" } else { "build/shareware/racer-shareware.apk" } }}
+    mkdir -p "$(dirname "$apk")"
+    bash tools/godot_headless.sh --export-{{ profile }} "{{ preset }}" "$apk"
+    ls -l "$apk"
+    unzip -lv "$apk" 'lib/*/libgodot_android.so' | tail -n +4 | head -n 1
 
 # Build, install and launch on the attached device.
 android profile="debug" features="": (android-apk profile features)
