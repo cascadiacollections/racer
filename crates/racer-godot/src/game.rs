@@ -670,6 +670,11 @@ impl Racer {
             self.g.start_seed(seed, true);
         }
         let dev = crate::cli::DevArgs::parse(&args);
+        self.g.tier =
+            crate::tier::Tier::detect(Os::singleton().has_feature("shareware"), dev.shareware);
+        if self.g.tier.is_shareware() {
+            godot_print!("racer: shareware edition");
+        }
         if dev.bench {
             let seconds = dev.bench_seconds.unwrap_or(perf::BENCH_SECONDS);
             self.g.fixed_forks = true;

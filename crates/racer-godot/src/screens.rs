@@ -224,7 +224,22 @@ fn title(g: &Game, c: &mut Canvas, art: &Art, l: &Layout) -> Vec<Button> {
     );
     labelled(c, &mut out, start, "START", Action::Start, true);
     labelled(c, &mut out, daily, "DAILY", Action::Daily, false);
-    labelled(c, &mut out, tracks, "TRACKS", Action::Tracks, false);
+    if g.tier.is_shareware() {
+        // No editor in the shareware edition (`tier.rs`): the plate stays,
+        // dimmed and without a button, so the title keeps its layout.
+        plate(c, tracks, false);
+        let cx = tracks.x + tracks.w / 2;
+        c.text_centred(cx, tracks.y + tracks.h / 2 - 9, "TRACKS", ASPHALT_LT, 2);
+        c.text_centred(
+            cx,
+            tracks.y + tracks.h / 2 + 8,
+            crate::tier::FULL_GAME_ONLY,
+            ASPHALT_LT,
+            1,
+        );
+    } else {
+        labelled(c, &mut out, tracks, "TRACKS", Action::Tracks, false);
+    }
     labelled(c, &mut out, demo, "DEMO", Action::Demo, false);
     settings_button(c, &mut out);
     out
@@ -515,18 +530,20 @@ fn results(g: &Game, c: &mut Canvas, l: &Layout) -> Vec<Button> {
     let mut out = Vec::new();
     let Some(run) = &g.run else { return out };
     let won = run.phase() == RunPhase::Won;
+    let capped = g.shareware_ended();
     banner(
         c,
         l.w / 2,
         16,
         match (won, &g.custom) {
+            _ if capped => "SHAREWARE END",
             (true, None) => "RUN CLEAR",
             (true, Some(c)) if c.timed => "COURSE CLEAR",
             (true, Some(_)) => "FINISHED",
             (false, _) => "TIME UP",
         },
-        if won { YELLOW } else { RED },
-        3,
+        if won || capped { YELLOW } else { RED },
+        if capped { 2 } else { 3 },
     );
     c.text(10, 48, "TRACK  ROAD    TIME   GATE", ASPHALT_LT, 1);
     let mut total = 0;

@@ -358,7 +358,9 @@ jobs:
           RUN_NUMBER: ${{ github.run_number }}
         run: |
           set -eu
-          base=$(sed -n 's/^version\/name="\(.*\)"$/\1/p' export_presets.cfg)
+          # Android and Android Shareware carry the same version (tier.rs);
+          # read the first and rewrite both.
+          base=$(sed -n 's/^version\/name="\(.*\)"$/\1/p' export_presets.cfg | head -n 1)
           test -n "$base"
           name="$base-dev.$RUN_NUMBER"
           sed -i -e "s/^version\/code=.*/version\/code=$RUN_NUMBER/" \

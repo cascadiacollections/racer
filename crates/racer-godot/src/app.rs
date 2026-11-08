@@ -245,6 +245,8 @@ pub struct Game {
     pub custom: Option<Custom>,
     /// The TRACKS list and the editor.
     pub editor: Editor,
+    /// Shareware or full (`tier.rs`). Set once by the node at start-up.
+    pub tier: crate::tier::Tier,
     /// Today, in UTC days since the Unix epoch, once the adapter has said.
     pub today: Option<u64>,
     /// The day of the daily run being raced; `None` for any other run.
@@ -333,6 +335,7 @@ impl Game {
             attempt: 0,
             custom: None,
             editor: Editor::new(),
+            tier: crate::tier::Tier::Full,
             today: None,
             daily: None,
             daily_record: DailyRecord::default(),
@@ -441,6 +444,9 @@ impl Game {
 
     /// Open the TRACKS list.
     fn open_tracks(&mut self) {
+        if self.tier.is_shareware() {
+            return;
+        }
         self.go_to_title();
         self.mode = Mode::Editor;
         self.editor.open_tracks(self.builder.as_mut());
@@ -773,8 +779,21 @@ impl Game {
 
     /// Whether the results and pause offer FORK THIS TRACK: a player's race
     /// (not DEMO's), not a test drive of the draft itself.
+    /// Never in the shareware edition, which has no editor (`tier.rs`).
     pub fn can_fork(&self) -> bool {
-        self.demo.is_none() && !self.custom.as_ref().is_some_and(|c| c.test)
+        !self.tier.is_shareware()
+            && self.demo.is_none()
+            && !self.custom.as_ref().is_some_and(|c| c.test)
+    }
+
+    /// Whether the run stopped at the shareware edition's cap (`tier.rs`):
+    /// on the results screen at a fork rather than won or lost.
+    pub fn shareware_ended(&self) -> bool {
+        self.mode == Mode::Results
+            && self
+                .run
+                .as_ref()
+                .is_some_and(|r| r.phase() == RunPhase::Forking)
     }
 
     fn results(&mut self, i: &Intents, confirm: bool) {
@@ -1086,6 +1105,22 @@ impl Game {
         let Some(run) = &self.run else { return };
         match run.phase() {
             RunPhase::Racing => {}
+            RunPhase::Forking
+                if self.demo.is_none()
+                    && self.custom.is_none()
+                    && self.tier.run_capped(run.results().len()) =>
+            {
+                // The shareware edition ends here, saved and scored as far
+                // as it went. The run file reads as a run stopped at a
+                // fork, so the format does not change.
+                self.sfx.retain(|s| *s != Sfx::Chime);
+                self.sfx.push(Sfx::Win);
+                self.mode = Mode::Results;
+                self.touch.release_all();
+                self.fx.push(Effect::KeepScreenOn(false));
+                self.save_run(Ending::Quit);
+                self.daily_ended();
+            }
             RunPhase::Forking => {
                 self.mode = Mode::Fork;
                 self.fork_sel = 0;
@@ -1583,6 +1618,64 @@ mod tests {
         }
         assert_eq!(g.mode, Mode::Results);
         fx
+    }
+
+    /// Race every track, taking the easy road at each fork, until the
+    /// results screen or `stop_at_fork` forks in. Returns the effects.
+    fn race_on(g: &mut Game, stop_at_fork: usize) -> Vec<Effect> {
+        let mut fx = Vec::new();
+        let mut forks = 0;
+        for _ in 0..100_000 {
+            match g.mode {
+                Mode::Results => return fx,
+                Mode::Fork if forks == stop_at_fork => return fx,
+                Mode::Fork => {
+                    forks += 1;
+                    fx.extend(frame(g, vec![Event::Key(K::Enter)], vec![]));
+                }
+                _ => fx.extend(frame(g, vec![], vec![])),
+            }
+        }
+        panic!("the run never reached results");
+    }
+
+    #[test]
+    fn a_shareware_run_ends_saved_at_the_fork_after_the_cap() {
+        let mut g = game(30.0);
+        g.tier = crate::tier::Tier::Shareware;
+        start(&mut g);
+        let fx = race_on(&mut g, usize::MAX);
+        assert_eq!(g.mode, Mode::Results);
+        assert!(g.shareware_ended());
+        assert_eq!(
+            g.run.as_ref().unwrap().results().len(),
+            crate::tier::SHAREWARE_TRACKS
+        );
+        assert!(!g.can_fork(), "no FORK TRACK without the editor");
+        assert_eq!(
+            fx.iter()
+                .filter(|e| matches!(e, Effect::SaveRun { .. }))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_full_run_forks_on_past_the_shareware_cap() {
+        let mut g = game(30.0);
+        start(&mut g);
+        race_on(&mut g, crate::tier::SHAREWARE_TRACKS);
+        assert_eq!(g.mode, Mode::Fork);
+        assert!(!g.shareware_ended());
+    }
+
+    #[test]
+    fn shareware_leaves_the_tracks_list_out() {
+        let mut g = game(30.0);
+        g.tier = crate::tier::Tier::Shareware;
+        frame(&mut g, vec![], vec![]);
+        g.open_tracks();
+        assert_eq!(g.mode, Mode::Title);
     }
 
     /// RETRY SEED from the results, by keys.

@@ -58,6 +58,7 @@ pub mod scenery;
 pub mod screens;
 pub mod season;
 pub mod sprites;
+pub mod tier;
 pub mod touch;
 pub mod track_store;
 
