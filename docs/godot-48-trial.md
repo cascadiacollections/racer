@@ -60,11 +60,21 @@ Downloads go to `~/.cache/racer/godot-trial`. The report is
 `build/godot-48-trial/report.txt`. Nothing is written into the 4.7.2 template
 directory or the stripped-engine lock.
 
-CI runs the same `run` as **godot 4.8-beta2 trial (allow failure)**
-(`continue-on-error`, and not in `dev release`'s `needs`). A red trial does
-not fail the workflow. `python3 tools/godot_48_trial.py self-test` is the
-blocking check: it only asserts the stable pin and that Python 3.9 does not
-pass the engine-build floor.
+CI runs the same `run` only on request, in the opt-in **godot-4.8-trial**
+workflow (`.github/workflows/godot-4.8-trial.yml`, `workflow_dispatch` only):
+
+```
+gh workflow run godot-4.8-trial.yml -R cascadiacollections/racer
+gh workflow run godot-4.8-trial.yml -R cascadiacollections/racer -f custom_engine=true
+```
+
+Pull requests and pushes to main never run it, so it costs nothing until
+someone dispatches it. Its `compare` job uploads `report.txt` as the
+`godot-48-trial-report` artifact. `custom_engine=true` adds an allow-failure
+`build-engine` job that uploads `godot-48-trial-engine`. In `ci.yml`,
+`python3 tools/godot_48_trial.py self-test` is the blocking check: it asserts
+the stable pin, that Python 3.9 does not pass the engine-build floor, and that
+the trial workflow stays dispatch-only and out of `ci.yml`.
 
 Headless, 4.8-beta2 prints `WARNING: GameMode: Failed to enable` when the
 desktop GameMode daemon is not installed. 4.7.2 did not. racer does not use

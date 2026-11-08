@@ -1,0 +1,92 @@
+name: godot-4.8-trial
+
+# Opt-in Godot 4.8-beta2 trial (docs/godot-48-trial.md). workflow_dispatch
+# only, so pull requests, pushes to main and the dev release never run or
+# wait on it. Do not set GODOT_VERSION here: the stable 4.7.2 pin lives in
+# ci.yml and tools/godot_template.py, and `godot_48_trial.py self-test`
+# (blocking, in ci.yml) checks that this workflow stays dispatch-only.
+#
+#   gh workflow run godot-4.8-trial.yml -R cascadiacollections/racer
+#   gh workflow run godot-4.8-trial.yml -R cascadiacollections/racer -f custom_engine=true
+
+on:
+  workflow_dispatch:
+    inputs:
+      custom_engine:
+        description: "Also build the stripped 4.8-beta2 Android arm64 engine (Python >= 3.10). Allow-failure. Does not publish or edit the 4.7.2 lock."
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Import, the audio shutdown check and a Linux release export on the
+  # official 4.8-beta2 editor and templates, the same on 4.7.2 for sizes,
+  # the arm64 api-4-7 library (the runner sets ANDROID_NDK_LATEST_HOME), and
+  # the informational api-custom probe.
+  compare:
+    name: official 4.8-beta2 vs 4.7.2
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ~/.cache/racer/godot-trial
+          key: godot-trial-${{ hashFiles('tools/godot_48_trial.py') }}
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable  # the pinned channel still comes from rust-toolchain.toml
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: godot-48-trial
+      - name: self-test
+        run: python3 tools/godot_48_trial.py self-test
+      - name: trial (api-4-7 extension on the 4.8-beta2 editor)
+        run: python3 tools/godot_48_trial.py run
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: godot-48-trial-report
+          path: build/godot-48-trial/report.txt
+          if-no-files-found: warn
+
+  # Separate from the comparison so a long or failed engine compile does not
+  # hide it. Nothing here publishes a release, attests, or writes
+  # tools/godot_templates.lock.json.
+  custom-engine:
+    name: stripped 4.8-beta2 engine
+    if: ${{ inputs.custom_engine }}
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # uv runs the SCons version godot_template.py pins.
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.13.0"
+          enable-cache: false
+      # ANDROID_HOME comes with the runner image; Godot's build installs the
+      # NDK version it pins (platform/android/detect.py) with sdkmanager.
+      - name: build the stripped Android arm64 engine
+        run: python3 tools/godot_48_trial.py build-engine
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: godot-48-trial-engine
+          path: build/godot-48-trial/engine/
+          if-no-files-found: warn
