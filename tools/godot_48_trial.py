@@ -427,18 +427,20 @@ def assert_stable_pin() -> None:
     lock = json.loads((ROOT / "tools" / "godot_templates.lock.json").read_text(encoding="utf-8"))
     if lock.get("godot") != STABLE_TAG or lock.get("commit") != STABLE_COMMIT:
         fail("tools/godot_templates.lock.json is not the 4.7.2-stable pin")
+    # The trial runs only when someone dispatches godot-4.8-trial.yml. It must
+    # not come back into ci.yml, where it would bill every pull request.
     ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    start = ci.find("  godot-48-trial:")
-    if start < 0:
-        fail("ci.yml has no godot-48-trial job")
-    window = ci[start : start + 400]
-    if "continue-on-error: true" not in window:
-        fail("godot-48-trial must stay continue-on-error so it cannot fail CI")
-    needs = re.search(r"\n  dev-release:.*?needs: \[([^\]]+)\]", ci, re.S)
-    if not needs:
-        fail("could not find dev-release's needs list")
-    if "godot-48-trial" in needs.group(1):
-        fail("dev-release must not wait on the 4.8 trial")
+    if "godot_48_trial.py run" in ci or "godot-48-trial:" in ci:
+        fail("ci.yml must not run the 4.8 trial; it lives in godot-4.8-trial.yml")
+    trial = (ROOT / ".github" / "workflows" / "godot-4.8-trial.yml").read_text(encoding="utf-8")
+    on = re.search(r"^on:\n(.*?)^\S", trial, re.S | re.M)
+    if not on:
+        fail("godot-4.8-trial.yml has no on: block")
+    triggers = set(re.findall(r"^  ([a-z_]+):", on.group(1), re.M))
+    if triggers != {"workflow_dispatch"}:
+        fail(f"godot-4.8-trial.yml must be workflow_dispatch only, found {sorted(triggers)}")
+    if re.search(r"^\s+GODOT_VERSION:", trial, re.M):
+        fail("godot-4.8-trial.yml must not set GODOT_VERSION")
 
 
 def snapshot_status() -> set[str]:
@@ -730,7 +732,7 @@ def cmd_run(skip_baseline: bool, skip_probe: bool) -> None:
                 "racer.gdextension maps android.release.arm64 to "
                 "target/aarch64-linux-android/release/libracer_godot.so. "
                 "That library is the same api-4-7 build for either engine; "
-                "CI's trial job builds it when ANDROID_NDK_LATEST_HOME is set."
+                "The godot-4.8-trial workflow builds it (the runner sets ANDROID_NDK_LATEST_HOME)."
             )
         else:
             arm = cargo_android_lib(ndk)
