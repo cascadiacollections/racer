@@ -356,3 +356,7 @@ summary { cursor: pointer; color: var(--yellow); }
   .halloween-grid { grid-template-columns: minmax(0, 1fr); }
   .halloween-grid figure { max-width: 240px; }
 }
+
+/* Cross-promotion for the studio's first game. */
+.sibling { border-top: var(--rule, 1px solid #4446); }
+.sibling p { max-width: 62ch; }
