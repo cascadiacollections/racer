@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>racer: every road proven drivable (working codename)</title>
-<meta name="description" content="racer is the working codename of a portrait, retro pseudo-3D roguelike racer in which every generated track is driven by a human-like bot before you see it. An early prototype for Android phones.">
+<meta name="description" content="An early prototype of a portrait, retro pseudo-3D roguelike racer in which every generated track is driven by a human-like bot before you see it. Free iPhone beta on TestFlight; from the studio behind Salt Line.">
 <!-- The placeholder below is rewritten to the live Pages base URL at deploy
      time (.github/workflows/pages.yml); it only affects link previews. -->
 <link rel="canonical" href="__SITE_URL__">
@@ -20,7 +20,6 @@
 <link rel="icon" href="assets/favicon.png" type="image/png">
 <link rel="apple-touch-icon" href="assets/favicon.png">
 <link rel="stylesheet" href="style.css">
-<link rel="stylesheet" href="testflight-promo.css">
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
@@ -39,20 +38,11 @@
     <a href="#tech">Under the hood</a>
     <a href="#dev">Dev build</a>
     <a href="#build">Build it</a>
-    <a class="ext" href="https://github.com/cascadiacollections/racer">Source ↗</a>
   </nav>
 </header>
 
 <main id="main">
-<section class="halloween-promo" aria-labelledby="testflight-promo-title" hidden>
-  <div>
-    <p class="promo-dates"><span aria-hidden="true">🎃</span> Halloween week · October 25–31, 2026</p>
-    <h2 id="testflight-promo-title">Take the haunted route.</h2>
-    <p>Five spooky biomes. One more run. Try the Racer iOS beta.</p>
-    <p class="promo-note">Free to test with Apple TestFlight. Public builds unlock after Apple beta approval. Promo ends November 1 at 12:00 a.m. Pacific.</p>
-  </div>
-  <a class="promo-link" href="https://testflight.apple.com/join/9USbkcSq" aria-label="Join the Racer iOS beta on TestFlight">Join the iOS beta <span aria-hidden="true">↗</span></a>
-</section>
+
 
 
 <section id="top" class="hero">
@@ -79,15 +69,14 @@
     </ul>
 
     <div class="cta">
-      <a class="btn" href="https://testflight.apple.com/join/9USbkcSq">Join the iOS TestFlight beta</a>
-      <a class="btn primary" href="#dev">Get the dev build</a>
-      <a class="btn" href="https://github.com/cascadiacollections/racer">Get the source</a>
-      <a class="btn ghost" href="https://github.com/cascadiacollections/racer/blob/main/design/DESIGN.md">Read the design doc</a>
+      <a class="btn primary" href="https://testflight.apple.com/join/9USbkcSq">Play the iPhone beta, free</a>
+      <a class="btn" href="https://cascadiacollections.github.io/saltline/">Play Salt Line, our first game</a>
     </div>
 
     <p class="fineprint">"racer" is a working codename: the game has no name
-      yet. Android dev builds are available for sideloading. The iOS public beta will be available after Apple beta review. The source
-      and the dev build need access to the GitHub repository.</p>
+      yet, and it's an early prototype. The iPhone beta is free through TestFlight.
+      Android dev builds, the source and the design doc are for testers with access
+      to the repository (<a href="#dev">dev build</a>).</p>
   </div>
 </section>
 
@@ -463,6 +452,15 @@ just balance   # build and prove 1,800 tracks</code></pre>
   </ul>
 </section>
 
+<!-- ---------------------------------------------------- from the maker -->
+<section class="sibling" aria-labelledby="sibling-h">
+  <h2 id="sibling-h">While you wait: Salt Line</h2>
+  <p>Same studio, same rules: a deterministic Rust simulation that proves every
+    level fair before you see it. Salt Line is an artillery roguelike: read the wind,
+    break the ground, make every shell count. It has a free demo and is coming to Steam.</p>
+  <p><a class="btn primary" href="https://cascadiacollections.github.io/saltline/">See Salt Line</a></p>
+</section>
+
 </main>
 
 <footer>
@@ -486,6 +484,5 @@ just balance   # build and prove 1,800 tracks</code></pre>
 </footer>
 
 <script src="main.js" defer></script>
-<script src="testflight-promo.js" defer></script>
 </body>
 </html>
