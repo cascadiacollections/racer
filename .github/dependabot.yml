@@ -1,0 +1,34 @@
+version: 2
+# Every ecosystem waits 7 days before proposing a new release: hijacked
+# releases are usually caught and yanked within days, and nothing here is
+# urgent enough to need an update sooner. Security updates are not delayed
+# or grouped.
+updates:
+  # Actions are pinned to commit SHAs; Dependabot bumps the SHA and the version comment together.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  # racer-sim has no dependencies by design; this only ever touches the
+  # Godot crate's tree and the dev-dependencies (insta, proptest).
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      cargo:
+        patterns: ["*"]
+    ignore:
+      # The `api-4-7` feature ties the bindings to the engine version
+      # (crates/racer-godot/Cargo.toml). A new major is an engine upgrade
+      # decision, not a dependency bump.
+      - dependency-name: godot
+        update-types: ["version-update:semver-major"]
