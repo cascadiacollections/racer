@@ -949,6 +949,8 @@ def cmd_self_test() -> None:
 
     shared = json.loads(gt.PROFILE.read_text(encoding="utf-8"))["disabled_build_options"]
     adjusted = trial_profile()["disabled_build_options"]
+    if not isinstance(adjusted, dict):
+        fail("the trial profile's disabled_build_options is not an object")
     if set(shared) - set(adjusted) != set(TRIAL_PROFILE_DROPS):
         fail("the trial profile must drop exactly the trial drops")
     if adjusted.get("rendering_device") is not False or shared.get("vulkan") is not False:
