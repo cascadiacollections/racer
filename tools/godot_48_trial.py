@@ -77,6 +77,19 @@ TRIAL_COMMIT_SHORT = TRIAL_COMMIT[:9]
 # The stable 4.7.2 build script stays on its own 3.9+ note.
 TRIAL_PYTHON = (3, 10)
 
+# Trial-only edits to tools/godot_build_profile.json for the stripped 4.8
+# engine. The shared profile is the 4.7.2 one and is never rewritten: a
+# 4.7.2 build could not take these, and its lock key hashes the file.
+#
+# Dropped: options 4.8 no longer has. RegEx moved into core.
+TRIAL_PROFILE_DROPS = ("module_regex_enabled",)
+# Set: options 4.8 adds that the 4.7.2 profile cannot name. 4.8 defines
+# RD_ENABLED from `rendering_device` rather than from `vulkan`, so with only
+# vulkan=false display_server_android.cpp calls free_vulkan_global_context(),
+# which is declared under VULKAN_ENABLED, and the Android template fails to
+# compile (seen on beta3; same code on beta2 and master).
+TRIAL_PROFILE_SETS: dict[str, object] = {"rendering_device": False}
+
 # SHA-512 lines copied from SHA512-SUMS.txt on each godot-builds release.
 RELEASES = {
     "4.8-beta3": {
@@ -793,35 +806,58 @@ def fetch_trial_source(src: Path) -> None:
         fail(f"{src} has local changes to tracked files:\n{dirty}")
 
 
-def check_trial_profile(src: Path) -> None:
-    """Same name check as the stable builder, against the trial tree.
-
-    Godot applies a profile's options without checking their names. An option
-    4.8 renamed would otherwise be ignored. This does not change the stable
-    script's tag, which `key` hashes.
-    """
+def trial_profile() -> dict[str, object]:
+    """The shared profile with the trial-only drops and sets applied. The file is not modified."""
     import godot_template as gt
 
     profile = json.loads(gt.PROFILE.read_text(encoding="utf-8"))
-    known = (src / "SConstruct").read_text(encoding="utf-8")
-    for detect in (src / "platform").glob("*/detect.py"):
-        known += detect.read_text(encoding="utf-8")
-    unknown: list[str] = []
     options = profile.get("disabled_build_options", {})
     if not isinstance(options, dict):
         fail(f"{gt.PROFILE.name} disabled_build_options is not an object")
-    for option in options:
-        match = re.fullmatch(r"module_(\w+)_enabled", str(option))
-        if match:
-            if not (src / "modules" / match.group(1) / "config.py").is_file():
-                unknown.append(str(option))
-        elif f'"{option}"' not in known:
-            unknown.append(str(option))
-    if unknown:
+    missing = [name for name in TRIAL_PROFILE_DROPS if name not in options]
+    if missing:
+        fail(f"trial profile drops are not in {gt.PROFILE.name}: {', '.join(missing)}")
+    clash = sorted(name for name in TRIAL_PROFILE_SETS if name in options)
+    if clash:
+        fail(f"trial profile sets are already in {gt.PROFILE.name}: {', '.join(clash)}")
+    for name in TRIAL_PROFILE_DROPS:
+        del options[name]
+    options.update(TRIAL_PROFILE_SETS)
+    return profile
+
+
+def option_known(src: Path, option: str, known: str) -> bool:
+    match = re.fullmatch(r"module_(\w+)_enabled", option)
+    if match:
+        return (src / "modules" / match.group(1) / "config.py").is_file()
+    return f'"{option}"' in known
+
+
+def check_trial_profile(src: Path) -> dict[str, object]:
+    """Same name check as the stable builder, against the trial tree.
+
+    Godot applies a profile's options without checking their names. An option
+    4.8 renamed would otherwise be ignored. A trial drop the tree still has is
+    stale and refused too, so a drop cannot outlive the reason for it. This
+    does not change the stable script's tag, which `key` hashes.
+    """
+    import godot_template as gt
+
+    profile = trial_profile()
+    known = (src / "SConstruct").read_text(encoding="utf-8")
+    for detect in (src / "platform").glob("*/detect.py"):
+        known += detect.read_text(encoding="utf-8")
+    options = profile["disabled_build_options"]
+    assert isinstance(options, dict)
+    unknown = [str(option) for option in options if not option_known(src, str(option), known)]
+    stale = [option for option in TRIAL_PROFILE_DROPS if option_known(src, option, known)]
+    if unknown or stale:
         fail(
-            f"{gt.PROFILE.name} sets options Godot {TRIAL_VERSION} ({TRIAL_COMMIT_SHORT}) "
-            f"does not have: {', '.join(unknown)}"
+            f"{gt.PROFILE.name} (with the trial drops and sets) does not match Godot "
+            f"{TRIAL_VERSION} ({TRIAL_COMMIT_SHORT}): unknown={', '.join(unknown) or '-'} "
+            f"stale_drops={', '.join(stale) or '-'}"
         )
+    return profile
 
 
 def cmd_build_engine(dry_run: bool, jobs: int) -> None:
@@ -838,6 +874,10 @@ def cmd_build_engine(dry_run: bool, jobs: int) -> None:
         print(f"dry run: would fetch {TRIAL_COMMIT} into {src}")
         print(f"dry run: would write the arm64 library under {out}")
         print("dry run: would not write tools/godot_templates.lock.json")
+        print(
+            f"dry run: would build with the shared profile minus {', '.join(TRIAL_PROFILE_DROPS)} "
+            f"plus {', '.join(f'{k}={v}' for k, v in TRIAL_PROFILE_SETS.items())}"
+        )
         if not os.environ.get("ANDROID_HOME"):
             print("ANDROID_HOME is unset; a real build stops before SCons.")
         return
@@ -856,8 +896,14 @@ def cmd_build_engine(dry_run: bool, jobs: int) -> None:
     # Imported here so self-test does not load the stable build script.
     import godot_template as gt
 
-    check_trial_profile(src)
+    profile = check_trial_profile(src)
     out.mkdir(parents=True, exist_ok=True)
+    profile_path = src.parent / f"racer-{TRIAL_VERSION}-trial-profile.json"
+    profile_path.write_text(json.dumps(profile, indent="\t") + "\n", encoding="utf-8")
+    print(
+        f"trial profile {profile_path}: drops {', '.join(TRIAL_PROFILE_DROPS)}; "
+        f"sets {', '.join(f'{k}={v}' for k, v in TRIAL_PROFILE_SETS.items())}"
+    )
     env = os.environ.copy()
     # Release notes: a custom build is recognized as beta3 only with this set.
     env["GODOT_VERSION_STATUS"] = "beta3"
@@ -866,7 +912,7 @@ def cmd_build_engine(dry_run: bool, jobs: int) -> None:
         *gt.SCONS,
         f"-j{jobs}",
         *gt.scons_args(gt.ARCH),
-        f"build_profile={gt.PROFILE}",
+        f"build_profile={profile_path}",
     ]
     print("+ " + " ".join(cmd), flush=True)
     subprocess.run(cmd, cwd=src, env=env, check=True)
@@ -899,9 +945,32 @@ def cmd_self_test() -> None:
                 fail(f"bad sha512 for {spec['editor'] if 'editor' in key else spec['templates']}")
         if len(spec["commit"]) != 40:
             fail(f"commit for {spec['tag']} is not 40 hex chars")
+    import godot_template as gt
+
+    shared = json.loads(gt.PROFILE.read_text(encoding="utf-8"))["disabled_build_options"]
+    adjusted = trial_profile()["disabled_build_options"]
+    if set(shared) - set(adjusted) != set(TRIAL_PROFILE_DROPS):
+        fail("the trial profile must drop exactly the trial drops")
+    if adjusted.get("rendering_device") is not False or shared.get("vulkan") is not False:
+        fail("a Vulkan-less 4.8 build must also set rendering_device=false")
+    if "rendering_device" in shared:
+        fail("rendering_device must stay out of the shared 4.7.2 profile")
+    with tempfile.TemporaryDirectory() as tmp:
+        tree = Path(tmp)
+        (tree / "platform").mkdir()
+        names = []
+        for option in adjusted:
+            match = re.fullmatch(r"module_(\w+)_enabled", option)
+            if match:
+                (tree / "modules" / match.group(1)).mkdir(parents=True)
+                (tree / "modules" / match.group(1) / "config.py").write_text("")
+            else:
+                names.append(f'"{option}"')
+        (tree / "SConstruct").write_text("\n".join(names))
+        check_trial_profile(tree)
     if TRIAL_COMMIT_SHORT != "c51ff06e8":
         fail("short commit no longer matches the 4.8-beta3 release notes")
-    print("self-test ok: stable pin is 4.7.2, trial Python floor rejects 3.9")
+    print("self-test ok: stable pin is 4.7.2, trial Python floor rejects 3.9, trial profile drops regex and sets rendering_device=false")
 
 
 def main() -> None:
