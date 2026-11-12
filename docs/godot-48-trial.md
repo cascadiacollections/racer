@@ -1,11 +1,11 @@
-# Godot 4.8 beta 2 trial
+# Godot 4.8 beta 3 trial
 
 Godot **4.7.2** stays the editor, the CI export, and the stripped Android
 engine. This path does not change `GODOT_VERSION`, `project.godot`'s feature
 list, `racer.gdextension`'s `compatibility_minimum`, the `api-4-7` feature, or
 `tools/godot_templates.lock.json`.
 
-4.8 beta 2 (29 October 2026, commit `cafc17a192acf67903910a68aeb3c076c0907a4b`)
+4.8 beta 3 (9 November 2026, commit `c51ff06e8836a70ea905701c081bf94124dcd6ce`)
 is a preview with matching export templates. It is not a migration.
 
 ## What gdext can target
@@ -28,7 +28,7 @@ prints the features Cargo actually resolved. As of this trial:
 `run` records whether that probe typechecks. The shipped build stays
 `api-4-7` either way: a library generated from the 4.8 editor refuses to
 load on 4.7.2. On this run the probe typechecked, and the `api-4-7`
-extension loaded under the 4.8-beta2 editor (`racer: sim epoch 1`).
+extension loaded under the 4.8-beta2 editor (`racer: sim epoch 1`). Beta3 re-run pending.
 
 ## Run it
 
@@ -39,16 +39,16 @@ python3 tools/godot_48_trial.py run
 python3 tools/godot_48_trial.py build-engine --dry-run
 ```
 
-`run` downloads the official Linux editors and export templates for 4.8-beta2
+`run` downloads the official Linux editors and export templates for 4.8-beta3
 and, as a size baseline only, 4.7.2. It checks SHA-512 against the
 godot-builds `SHA512-SUMS.txt` published with each release, then checks:
 
 - editor `--version` (includes the build and the commit, for example
-  `4.8.beta2.official.cafc17a19`)
+  `4.8.beta3.official.c51ff06e8`)
 - engine commit (that same 9-character prefix)
 - template build key: `templates/version.txt`, the `GODOT_VERSION_FULL_CONFIG`
   string the editor uses as the export-templates directory name
-  (`4.8.beta2`, `4.7.2.stable`). The editor version must start with it.
+  (`4.8.beta3`, `4.7.2.stable`). The editor version must start with it.
 - packaged native libraries in the official templates, including arm64
   `libgodot_android.so`
 - the Rust libraries the export would ship (`linux` debug and release, and
@@ -76,7 +76,7 @@ someone dispatches it. Its `compare` job uploads `report.txt` as the
 the stable pin, that Python 3.9 does not pass the engine-build floor, and that
 the trial workflow stays dispatch-only and out of `ci.yml`.
 
-Headless, 4.8-beta2 prints `WARNING: GameMode: Failed to enable` when the
+Headless, 4.8 (seen on beta2) prints `WARNING: GameMode: Failed to enable` when the
 desktop GameMode daemon is not installed. 4.7.2 did not. racer does not use
 that daemon. The trial records the line and still requires a zero exit, the
 sim-epoch log, and no other warning or error. Both seasons did that on this run.
@@ -89,8 +89,8 @@ interpreter against 3.10 before it clones, then checks the requirement in the
 tree it checked out. The stable `just godot-template` command is unchanged
 and still builds 4.7.2.
 
-The clone is `~/.cache/racer/godot-4.8-beta2` (not the 4.7.2 cache). SCons is
-the same pin as the stable recipe, with `GODOT_VERSION_STATUS=beta2` so a
+The clone is `~/.cache/racer/godot-4.8-beta3` (not the 4.7.2 cache). SCons is
+the same pin as the stable recipe, with `GODOT_VERSION_STATUS=beta3` so a
 custom binary is recognized as this beta. The product is
 `build/godot-48-trial/engine/`. It is not locked, attested, or published.
 There is no Android SDK on a typical desk, so this command is for a machine
