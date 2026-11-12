@@ -96,6 +96,22 @@ custom binary is recognized as this beta. The product is
 There is no Android SDK on a typical desk, so this command is for a machine
 that already builds the stripped 4.7.2 engine.
 
+SCons gets a trial profile written next to the clone, not
+`tools/godot_build_profile.json`. That file stays the 4.7.2 profile, and the
+4.7.2 lock key hashes it. The trial copy changes two things:
+
+- **Drops `module_regex_enabled`.** RegEx moved into core in 4.8, so the
+  option no longer exists.
+- **Sets `rendering_device=false`.** 4.8 adds this option, on by default, and
+  defines `RD_ENABLED` from it rather than from `vulkan`. With only
+  `vulkan=false`, `display_server_android.cpp` calls
+  `free_vulkan_global_context()`, which is declared only under
+  `VULKAN_ENABLED`, and the Android template fails to compile. Salt Line hit
+  this first (cascadiacollections/saltline#154).
+
+Every option in the trial profile is checked against the fetched tree. A drop
+the tree still has is refused as stale. `self-test` covers both checks.
+
 ## Device checklist
 
 Upstream fixes to confirm on a phone, not defects already seen in racer.
