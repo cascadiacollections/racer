@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Opt-in Godot 4.8-beta3 compatibility trial.
+"""Opt-in Godot 4.8-beta4 compatibility trial.
 
 The stable pin stays Godot 4.7.2: editor, CI, export templates and the
 stripped Android engine (tools/godot_template.py, tools/godot_templates.lock.json).
@@ -13,7 +13,7 @@ those commands.
         What the locked gdext crate can say about a 4.8 API.
 
     godot_48_trial.py fetch
-        Download the official 4.8-beta3 Linux editor and export templates,
+        Download the official 4.8-beta4 Linux editor and export templates,
         and the 4.7.2 pair used only as a size baseline. SHA-512 is the
         digest published in that release's SHA512-SUMS.txt.
 
@@ -32,7 +32,7 @@ those commands.
         on 4.7.2.
 
     godot_48_trial.py build-engine [--dry-run]
-        Custom Android arm64 engine from the 4.8-beta3 commit, for a later
+        Custom Android arm64 engine from the 4.8-beta4 commit, for a later
         device experiment. Refuses Python older than 3.10 before it clones
         anything. Does not publish, attest, or lock. Not used by CI.
 
@@ -70,8 +70,8 @@ STABLE_COMMIT = "ed1daf0bf001b61586d9930840f2f1394092c079"
 
 # Official 4.8 beta 3, 9 November 2026. The source tag is not on
 # godotengine/godot; godot-builds names the commit in the release notes.
-TRIAL_VERSION = "4.8-beta3"
-TRIAL_COMMIT = "c51ff06e8836a70ea905701c081bf94124dcd6ce"
+TRIAL_VERSION = "4.8-beta4"
+TRIAL_COMMIT = "b070e63b161aa816afac71dcfc9d60859d38f220"
 TRIAL_COMMIT_SHORT = TRIAL_COMMIT[:9]
 # SConstruct on that commit calls EnsurePythonVersion(3, 10) (GH-122597).
 # The stable 4.7.2 build script stays on its own 3.9+ note.
@@ -87,19 +87,19 @@ TRIAL_PROFILE_DROPS = ("module_regex_enabled",)
 # RD_ENABLED from `rendering_device` rather than from `vulkan`, so with only
 # vulkan=false display_server_android.cpp calls free_vulkan_global_context(),
 # which is declared under VULKAN_ENABLED, and the Android template fails to
-# compile (seen on beta3; same code on beta2 and master).
+# compile (seen on beta3 and beta4; same code on beta2 and master).
 TRIAL_PROFILE_SETS: dict[str, object] = {"rendering_device": False}
 
 # SHA-512 lines copied from SHA512-SUMS.txt on each godot-builds release.
 RELEASES = {
-    "4.8-beta3": {
-        "tag": "4.8-beta3",
+    "4.8-beta4": {
+        "tag": "4.8-beta4",
         "commit": TRIAL_COMMIT,
-        "version_prefix": "4.8.beta3",
-        "editor": "Godot_v4.8-beta3_linux.x86_64.zip",
-        "editor_sha512": "c6dfb51e2d305934345042bedcf19ea8f421b774e601cd11b92cd39112d3f8855ab600a4602d458a5509076b647db1171d23440c365ee3d4fc78111958a77a28",
-        "templates": "Godot_v4.8-beta3_export_templates.tpz",
-        "templates_sha512": "541950a4a79a68c41109ebfc0278ee6d52396da340dd4702f113d528bd0038df3f8b339f04bf4af8072e837fbfe599556d67181ede1867de058ccd2272734505",
+        "version_prefix": "4.8.beta4",
+        "editor": "Godot_v4.8-beta4_linux.x86_64.zip",
+        "editor_sha512": "60d48aeaf0c9c1b18d2c88af580e6b2c499a17bcff487f572803ba0b350384547ae5eb7c8697ca7bd85032c6d26c1bf7247780ea5849f78e49ac60c6e93876f4",
+        "templates": "Godot_v4.8-beta4_export_templates.tpz",
+        "templates_sha512": "3a4069826e50ff69b2a949a831fc1cb8c47490eff012e8b13d8a3e325bae7b9e6e68d3deee43b72984a67e374dc7863ca91707cedcb0f71692b35fcd19201393",
     },
     "4.7.2": {
         "tag": "4.7.2-stable",
@@ -339,7 +339,7 @@ def prepare(label: str) -> dict[str, object]:
     spec = RELEASES[label]
     editor_zip, tpz = fetch_release(label)
     # version.txt is the template build key and the export-templates directory
-    # name (GODOT_VERSION_FULL_CONFIG, e.g. 4.7.2.stable or 4.8.beta3).
+    # name (GODOT_VERSION_FULL_CONFIG, e.g. 4.7.2.stable or 4.8.beta4).
     # `godot --version` is longer: it appends the build and the commit
     # (4.7.2.stable.official.ed1daf0bf).
     version_txt = read_zip_text(tpz, "templates/version.txt").strip()
@@ -540,7 +540,7 @@ def describe_so(path: Path) -> str:
     return f"{path.relative_to(ROOT)}  {path.stat().st_size} bytes  {elf_desc(header)}"
 
 
-# 4.8-beta3 warns when the desktop GameMode daemon is absent. racer does not
+# 4.8-beta4 warns when the desktop GameMode daemon is absent. racer does not
 # use that daemon; 4.7.2 simply did not print the line. It is not a load failure.
 _GAME_MODE_WARNING = "WARNING: GameMode: Failed to enable"
 
@@ -662,7 +662,7 @@ def probe_api_custom(binary: Path) -> list[str]:
         if proc.returncode == 0:
             lines.append(
                 "api-custom probe: typecheck succeeded against bindings generated from "
-                "the 4.8-beta3 editor. That is not the library this repo ships. "
+                "the 4.8-beta4 editor. That is not the library this repo ships. "
                 "gdext would refuse to load it on 4.7.2 (runtime older than the compiled API)."
             )
         else:
@@ -722,7 +722,7 @@ def cmd_run(skip_baseline: bool, skip_probe: bool) -> None:
     before = snapshot_status()
     saved = project_bytes()
     lines = cmd_report()
-    labels = ["4.8-beta3"] if skip_baseline else ["4.7.2", "4.8-beta3"]
+    labels = ["4.8-beta4"] if skip_baseline else ["4.7.2", "4.8-beta4"]
     try:
         prepared = {label: prepare(label) for label in labels}
         for label, item in prepared.items():
@@ -759,7 +759,7 @@ def cmd_run(skip_baseline: bool, skip_probe: bool) -> None:
             lines.append(f"## Linux release export ({label}, official templates, api-4-7 extension)")
             lines.extend(export_listing(dest))
         if not skip_probe:
-            trial = prepared["4.8-beta3"]
+            trial = prepared["4.8-beta4"]
             binary = trial["binary"]
             assert isinstance(binary, Path)
             lines.append("## api-custom")
@@ -786,7 +786,7 @@ def sconstruct_python(src: Path) -> tuple[int, int]:
 
 
 def fetch_trial_source(src: Path) -> None:
-    """Shallow checkout of the beta commit. There is no 4.8-beta3 git tag."""
+    """Shallow checkout of the beta commit. There is no 4.8-beta4 git tag."""
     src.parent.mkdir(parents=True, exist_ok=True)
     if not (src / ".git").exists():
         run(["git", "init", str(src)])
@@ -905,8 +905,8 @@ def cmd_build_engine(dry_run: bool, jobs: int) -> None:
         f"sets {', '.join(f'{k}={v}' for k, v in TRIAL_PROFILE_SETS.items())}"
     )
     env = os.environ.copy()
-    # Release notes: a custom build is recognized as beta3 only with this set.
-    env["GODOT_VERSION_STATUS"] = "beta3"
+    # Release notes: a custom build is recognized as beta4 only with this set.
+    env["GODOT_VERSION_STATUS"] = "beta4"
     env["ANDROID_HOME"] = android
     cmd = [
         *gt.SCONS,
@@ -970,8 +970,8 @@ def cmd_self_test() -> None:
                 names.append(f'"{option}"')
         (tree / "SConstruct").write_text("\n".join(names))
         check_trial_profile(tree)
-    if TRIAL_COMMIT_SHORT != "c51ff06e8":
-        fail("short commit no longer matches the 4.8-beta3 release notes")
+    if TRIAL_COMMIT_SHORT != "b070e63b1":
+        fail("short commit no longer matches the 4.8-beta4 release notes")
     print("self-test ok: stable pin is 4.7.2, trial Python floor rejects 3.9, trial profile drops regex and sets rendering_device=false")
 
 
@@ -995,9 +995,9 @@ def main() -> None:
     elif args.cmd == "report":
         print("\n".join(cmd_report()))
     elif args.cmd == "fetch":
-        cmd_fetch(["4.7.2", "4.8-beta3"])
+        cmd_fetch(["4.7.2", "4.8-beta4"])
     elif args.cmd == "provenance":
-        print("\n".join(cmd_provenance(["4.7.2", "4.8-beta3"])))
+        print("\n".join(cmd_provenance(["4.7.2", "4.8-beta4"])))
     elif args.cmd == "run":
         cmd_run(args.skip_baseline, args.skip_probe)
     elif args.cmd == "build-engine":

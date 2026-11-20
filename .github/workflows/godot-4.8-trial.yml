@@ -1,6 +1,6 @@
 name: godot-4.8-trial
 
-# Opt-in Godot 4.8-beta3 trial (docs/godot-48-trial.md). workflow_dispatch
+# Opt-in Godot 4.8-beta4 trial (docs/godot-48-trial.md). workflow_dispatch
 # only, so pull requests, pushes to main and the dev release never run or
 # wait on it. Do not set GODOT_VERSION here: the stable 4.7.2 pin lives in
 # ci.yml and tools/godot_template.py, and `godot_48_trial.py self-test`
@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
     inputs:
       custom_engine:
-        description: "Also build the stripped 4.8-beta3 Android arm64 engine (Python >= 3.10). Allow-failure. Does not publish or edit the 4.7.2 lock."
+        description: "Also build the stripped 4.8-beta4 Android arm64 engine (Python >= 3.10). Allow-failure. Does not publish or edit the 4.7.2 lock."
         required: false
         type: boolean
         default: false
@@ -30,11 +30,11 @@ env:
 
 jobs:
   # Import, the audio shutdown check and a Linux release export on the
-  # official 4.8-beta3 editor and templates, the same on 4.7.2 for sizes,
+  # official 4.8-beta4 editor and templates, the same on 4.7.2 for sizes,
   # the arm64 api-4-7 library (the runner sets ANDROID_NDK_LATEST_HOME), and
   # the informational api-custom probe.
   compare:
-    name: official 4.8-beta3 vs 4.7.2
+    name: official 4.8-beta4 vs 4.7.2
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -53,7 +53,7 @@ jobs:
           key: godot-48-trial
       - name: self-test
         run: python3 tools/godot_48_trial.py self-test
-      - name: trial (api-4-7 extension on the 4.8-beta3 editor)
+      - name: trial (api-4-7 extension on the 4.8-beta4 editor)
         run: python3 tools/godot_48_trial.py run
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
@@ -66,7 +66,7 @@ jobs:
   # hide it. Nothing here publishes a release, attests, or writes
   # tools/godot_templates.lock.json.
   custom-engine:
-    name: stripped 4.8-beta3 engine
+    name: stripped 4.8-beta4 engine
     if: ${{ inputs.custom_engine }}
     continue-on-error: true
     runs-on: ubuntu-latest
