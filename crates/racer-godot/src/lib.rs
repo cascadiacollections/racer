@@ -49,6 +49,7 @@ pub mod input;
 pub mod layout;
 pub mod palette;
 pub mod perf;
+pub mod persist;
 #[cfg(feature = "profiling")]
 pub mod profiling;
 pub mod project;

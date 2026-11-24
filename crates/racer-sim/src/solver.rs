@@ -16,9 +16,14 @@
 //!    that the track is a lottery.
 //! 4. **Drift corners.** Every drift-required corner is checked by two
 //!    perfect bots: one that may drift must pass, and one held to grip must
-//!    fail the timer or lose at least [`DRIFT_LOSS`] seconds there. A
-//!    corner that is not demanding enough is tightened ("repair κ") and the
-//!    track recalibrated, up to [`DRIFT_REPAIRS`] times.
+//!    lose at least [`DRIFT_LOSS`] seconds over that corner, or run out of
+//!    time while it is inside the corner's window (DESIGN §2.5). A timeout
+//!    on an earlier gate is not that corner's failure. The loss is then
+//!    measured on a second grip-only drive whose timer cannot cut the
+//!    corner off, so a later corner is still timed. A corner that was
+//!    driven and is not demanding enough is tightened ("repair κ") and the
+//!    track recalibrated, up to [`DRIFT_REPAIRS`] times. A corner the grip
+//!    bot never reaches, even then, fails the draft.
 //! 5. **Floor.** Against *every* reachable loadout, the human bot, with
 //!    noise seeds calibration never saw, must keep the required margin at
 //!    every checkpoint in at least 15 of 16 trials ([`MARGIN_PASSES`]).
@@ -127,9 +132,16 @@ pub struct DriftCheck {
     /// The corner's first segment.
     pub start: usize,
     /// Seconds the grip-only bot lost over the corner and its exit.
+    /// Zero when the window was not driven by both bots.
     pub loss: f64,
-    /// Whether the grip-only bot ran out of time.
+    /// The grip-only bot reached this corner's approach and ran out of
+    /// time before clearing its window. A timeout anywhere else is not
+    /// this corner's failure.
     pub grip_failed: bool,
+    /// The grip-only bot reached the approach, so the window was actually
+    /// driven. False when a timeout earlier on the track is all the trace
+    /// shows.
+    pub reached: bool,
     /// Times the corner was tightened.
     pub repairs: u32,
 }
@@ -385,9 +397,32 @@ pub fn check(untimed: &Track, rules: &Rules, drift_repairs: u32, cost: &mut u64)
     if strict {
         let grip = perfect_run(&track, &params, false);
         *cost += grip.cost;
-        drift = drift_checks(&track, &best, &grip, drift_repairs);
-        if let Some(weak) = drift.iter().find(|d| !d.grip_failed && d.loss < DRIFT_LOSS) {
-            return Checked::WeakDrift(weak.start);
+        // The timed grip run stops at the first gate it cannot pay for, which
+        // may be before a later drift corner. The loss is a time through the
+        // corner, so measure it on a drive the timer does not cut short.
+        // Skip that drive when the timed trace already covers every window:
+        // the two drives match until the timer expires.
+        let loss_run = if drift_windows_open(&track, &grip) {
+            let run = perfect_run(&with_free_timer(&track), &params, false);
+            *cost += run.cost;
+            Some(run)
+        } else {
+            None
+        };
+        let loss_trace = loss_run.as_ref().map(|r| &r.trace).unwrap_or(&grip.trace);
+        drift = drift_checks(&track, &best, &grip, loss_trace, drift_repairs);
+        // The first corner that does not pass. One the grip bot never
+        // reached, even with the timer out of the way, cannot be tightened
+        // into evidence. One it did reach, but lost too little on, is
+        // tightened and checked again.
+        if let Some(bad) = drift
+            .iter()
+            .find(|d| !d.reached || (!d.grip_failed && d.loss < DRIFT_LOSS))
+        {
+            if !bad.reached {
+                return Checked::Failed(Failure::DriftCorner);
+            }
+            return Checked::WeakDrift(bad.start);
         }
     }
 
@@ -448,38 +483,92 @@ pub fn check(untimed: &Track, rules: &Rules, drift_repairs: u32, cost: &mut u64)
     )
 }
 
-/// The two-bot test on every drift-required corner: time from the corner's
-/// approach to past its exit, grip-only against the best plan.
+/// A copy of `track` whose timer cannot run out, so a grip-only drive
+/// records every corner instead of stopping at the first gate it misses.
+///
+/// Each section gets an equal share of the `u32` timer. The shares sum to
+/// at most `u32::MAX`, so crossing a gate cannot overflow it, and one
+/// section is still far longer than a race.
+fn with_free_timer(track: &Track) -> Arc<Track> {
+    let mut free = track.clone();
+    let n = free.checkpoints().len().max(1);
+    let allot = u32::MAX / n as u32;
+    free.set_allotments(vec![allot; n]);
+    Arc::new(free)
+}
+
+/// Segment range the drift corner is timed over: [`LEAD`] segments of
+/// approach through [`DRIFT_TAIL`] of exit, cut off at the finish line.
+/// The runoff past the finish is never driven, so a window that ended
+/// there would be missing from both traces and the loss would read as zero.
+fn drift_window(c: &crate::bot::Corner, finish: usize) -> (usize, usize) {
+    (
+        c.start.saturating_sub(LEAD),
+        (c.end + DRIFT_TAIL).min(finish),
+    )
+}
+
+/// Whether the timed grip run stopped before clearing some drift window.
+fn drift_windows_open(track: &Track, grip: &PerfectRun) -> bool {
+    let finish = track.checkpoints().last().copied().unwrap_or(0) as usize;
+    drift_corners(track, grip.race.params()).any(|c| {
+        let (a, b) = drift_window(&c, finish);
+        grip.trace.ticks_between(a, b).is_none()
+    })
+}
+
+/// Drift-required corners for `params`, in track order.
+fn drift_corners<'a>(
+    track: &'a Track,
+    params: &crate::car::CarParams,
+) -> impl Iterator<Item = crate::bot::Corner> + 'a {
+    corners(track, params).into_iter().filter(move |c| {
+        track.segments()[c.start..c.end]
+            .iter()
+            .any(|s| s.has(flags::DRIFT_REQ))
+    })
+}
+
+/// The two-bot test on every drift-required corner.
+///
+/// `grip` is the timed grip-only run: "ran out of time" counts only when
+/// that run entered this corner's window and did not clear it. A timeout
+/// on an earlier gate is not this corner's failure.
+///
+/// `loss_trace` is a grip-only trace that was not cut short by the timer
+/// (the timed trace itself, when it already covers every window). The loss
+/// is that trace's time across the window minus the drifting bot's.
 fn drift_checks(
     track: &Track,
     best: &PerfectRun,
     grip: &PerfectRun,
+    loss_trace: &crate::bot::Trace,
     repairs: u32,
 ) -> Vec<DriftCheck> {
-    let params = best.race.params();
-    corners(track, params)
-        .iter()
-        .filter(|c| {
-            track.segments()[c.start..c.end]
-                .iter()
-                .any(|s| s.has(flags::DRIFT_REQ))
-        })
+    let finish = track.checkpoints().last().copied().unwrap_or(0) as usize;
+    drift_corners(track, best.race.params())
         .map(|c| {
-            let (a, b) = (
-                c.start.saturating_sub(LEAD),
-                (c.end + DRIFT_TAIL).min(track.len() - 1),
-            );
+            let (a, b) = drift_window(&c, finish);
+            let in_range = a <= b;
+            let entered = |trace: &crate::bot::Trace, seg: usize| {
+                trace.seg_tick.get(seg).is_some_and(|&t| t != u32::MAX)
+            };
+            let grip_failed = in_range
+                && entered(&grip.trace, a)
+                && !entered(&grip.trace, b)
+                && grip.race.phase() == Phase::TimeUp;
+            let reached = in_range && entered(loss_trace, a);
             let with = best.trace.ticks_between(a, b);
-            let without = grip.trace.ticks_between(a, b);
-            let grip_failed = grip.race.phase() == Phase::TimeUp && without.is_none();
+            let without = loss_trace.ticks_between(a, b);
             let loss = match (with, without) {
-                (Some(w), Some(g)) => (g as f64 - w as f64) * crate::DT,
+                (Some(w), Some(g)) if in_range => (g as f64 - w as f64) * crate::DT,
                 _ => 0.0,
             };
             DriftCheck {
                 start: c.start,
                 loss,
                 grip_failed,
+                reached,
                 repairs,
             }
         })
@@ -518,7 +607,10 @@ mod tests {
                 b.failures
             );
             for d in &b.report.drift {
-                assert!(d.grip_failed || d.loss >= DRIFT_LOSS, "{d:?}");
+                assert!(
+                    d.reached && (d.grip_failed || d.loss >= DRIFT_LOSS),
+                    "{d:?}"
+                );
                 checked += 1;
             }
             let marked = b
@@ -529,6 +621,146 @@ mod tests {
             assert_eq!(marked.count(), b.report.drift.len());
         }
         assert!(checked >= 3);
+    }
+
+    /// A grip-only timeout that happens before the corner used to be
+    /// reported as that corner failing the timer. The corner was then
+    /// accepted without anyone driving it.
+    #[test]
+    fn a_timeout_before_the_corner_does_not_pass_it() {
+        use crate::bot::perfect::PerfectRun;
+        use crate::bot::Trace;
+        use crate::car::CarParams;
+        use crate::input::Input;
+        use crate::track::Builder;
+
+        let mut b = Builder::new();
+        // Long enough that the approach sits well down the road, then a
+        // tight bend, then a finish before the 40-segment exit runoff, so
+        // the window has to be clamped to the finish line.
+        b.straight(100);
+        let corner = b.len();
+        b.bend(50, -130, 6);
+        b.flag(corner, 50, flags::DRIFT_REQ);
+        b.straight(10).checkpoint().straight(80);
+        let mut track = b.build();
+        let finish = *track.checkpoints().last().unwrap() as usize;
+        assert!(
+            corner + 50 + DRIFT_TAIL > finish,
+            "the fixture's exit runoff must lie past the finish"
+        );
+        track.set_allotments(vec![1]);
+        let track = Arc::new(track);
+        let params = CarParams::BASE;
+
+        let mut timed_out = Race::new(track.clone(), params);
+        timed_out.step(Input::NEUTRAL);
+        assert_eq!(timed_out.phase(), Phase::TimeUp);
+
+        let n = track.len();
+        let mut early = vec![u32::MAX; n];
+        // Died on the opening straight, short of the approach.
+        for (i, slot) in early.iter_mut().enumerate().take(40) {
+            *slot = i as u32;
+        }
+        let grip_early = PerfectRun {
+            plan: vec![],
+            race: timed_out.clone(),
+            trace: Trace {
+                seg_tick: early,
+                samples: vec![],
+            },
+            cost: 0,
+        };
+        let best_trace = {
+            let mut seg_tick = vec![u32::MAX; n];
+            for (i, slot) in seg_tick.iter_mut().enumerate().take(finish + 1) {
+                *slot = i as u32;
+            }
+            Trace {
+                seg_tick,
+                samples: vec![],
+            }
+        };
+        // The drifting bot finished. Its race only needs a phase the loss
+        // path does not read; the trace is what the window is measured on.
+        let finished = Race::new(track.clone(), params);
+        // Phase is not read when both traces contain the window. The trace
+        // is the drive.
+        let best = PerfectRun {
+            plan: vec![true],
+            race: finished.clone(),
+            trace: best_trace.clone(),
+            cost: 0,
+        };
+        let missed = drift_checks(&track, &best, &grip_early, &grip_early.trace, 0);
+        assert_eq!(missed.len(), 1, "the flagged bend is one corner");
+        assert!(!missed[0].reached, "{:?}", missed[0]);
+        assert!(!missed[0].grip_failed, "{:?}", missed[0]);
+        assert_eq!(missed[0].loss, 0.0);
+
+        // Same timeout, but the grip bot did enter the approach and died
+        // inside the window: that is the corner's failure.
+        let mut mid = vec![u32::MAX; n];
+        let a = missed[0].start.saturating_sub(LEAD);
+        for (i, slot) in mid.iter_mut().enumerate().take(a + 1) {
+            *slot = i as u32;
+        }
+        let grip_mid = PerfectRun {
+            plan: vec![],
+            race: timed_out,
+            trace: Trace {
+                seg_tick: mid,
+                samples: vec![],
+            },
+            cost: 0,
+        };
+        let died_here = drift_checks(&track, &best, &grip_mid, &grip_mid.trace, 0);
+        assert!(
+            died_here[0].reached && died_here[0].grip_failed,
+            "{:?}",
+            died_here[0]
+        );
+        assert!(died_here[0].loss < DRIFT_LOSS);
+
+        // Both bots clear a window that ends at the finish, not in the
+        // undriven runoff. After the approach the grip bot is 200 ticks
+        // slower: 1.67 s across the corner. Shifting the whole trace would
+        // leave the time *between* the two ends unchanged.
+        let mut slow = best_trace.seg_tick.clone();
+        let approach = missed[0].start.saturating_sub(LEAD);
+        for (i, t) in slow.iter_mut().enumerate() {
+            if *t != u32::MAX && i > approach {
+                *t += 200;
+            }
+        }
+        let grip_slow = PerfectRun {
+            plan: vec![],
+            race: finished,
+            trace: Trace {
+                seg_tick: slow,
+                samples: vec![],
+            },
+            cost: 0,
+        };
+        let measured = drift_checks(&track, &best, &grip_slow, &grip_slow.trace, 0);
+        assert!(measured[0].reached, "{:?}", measured[0]);
+        assert!(!measured[0].grip_failed, "{:?}", measured[0]);
+        let loss = 200.0 * crate::DT;
+        assert!(
+            (measured[0].loss - loss).abs() < 1e-9,
+            "loss {} wanted {loss}",
+            measured[0].loss
+        );
+        assert!(measured[0].loss >= DRIFT_LOSS);
+
+        // The case the timed run gets wrong: it died before the corner, but
+        // the free-timer trace shows the corner itself costs 1.67 s. That
+        // is a pass, not a credit for the earlier timeout and not a reject.
+        let rescued = drift_checks(&track, &best, &grip_early, &grip_slow.trace, 0);
+        assert!(rescued[0].reached, "{:?}", rescued[0]);
+        assert!(!rescued[0].grip_failed, "{:?}", rescued[0]);
+        assert!((rescued[0].loss - loss).abs() < 1e-9, "{:?}", rescued[0]);
     }
 
     #[test]

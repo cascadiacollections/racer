@@ -207,7 +207,7 @@ impl INode2D for Racer {
             self.g.load_ghosts(&text);
             godot_print!("racer: {} ghosts loaded", self.g.ghosts().len());
         }
-        if let Ok(text) = std::fs::read_to_string(user_path(crate::daily::DAILY_FILE)) {
+        if let Some(text) = crate::persist::read_replaced(&user_path(crate::daily::DAILY_FILE)) {
             self.g.load_daily(&text);
         }
         let slots = load_layouts_file(crate::editor::store::SLOTS_FILE);
@@ -428,10 +428,7 @@ fn layouts_path(name: &str) -> std::path::PathBuf {
 /// Read a layouts file, if there is one. A file being replaced when the
 /// app died (only the temporary copy is whole) is read from that copy.
 fn load_layouts_file(name: &str) -> Option<String> {
-    let path = layouts_path(name);
-    std::fs::read_to_string(&path)
-        .ok()
-        .or_else(|| std::fs::read_to_string(path.with_extension("tmp")).ok())
+    crate::persist::read_replaced(&layouts_path(name))
 }
 
 /// Write (or with `None`, delete) a layouts file: to a temporary file, then
@@ -440,13 +437,7 @@ fn load_layouts_file(name: &str) -> Option<String> {
 fn store_layouts_file(name: &str, text: Option<&str>) -> bool {
     let path = layouts_path(name);
     let done = match text {
-        Some(text) => {
-            let tmp = path.with_extension("tmp");
-            path.parent()
-                .map_or(Ok(()), std::fs::create_dir_all)
-                .and_then(|()| std::fs::write(&tmp, text))
-                .and_then(|()| std::fs::rename(&tmp, &path))
-        }
+        Some(text) => write_atomic(&path, text),
         None => {
             // A stale temporary copy would be read back as the file.
             let _ = std::fs::remove_file(path.with_extension("tmp"));
@@ -526,11 +517,7 @@ fn user_path(name: &str) -> std::path::PathBuf {
 /// Write `text` to a temporary file beside `path`, then rename it over
 /// `path`, so a crash mid-write leaves the last good file.
 fn write_atomic(path: &std::path::Path, text: &str) -> std::io::Result<()> {
-    let tmp = path.with_extension("tmp");
-    path.parent()
-        .map_or(Ok(()), std::fs::create_dir_all)
-        .and_then(|()| std::fs::write(&tmp, text))
-        .and_then(|()| std::fs::rename(&tmp, path))
+    crate::persist::write_atomic(path, text)
 }
 
 /// `user://ghosts/ghosts.txt` as a filesystem path: the app's private data
@@ -543,9 +530,10 @@ fn ghosts_path() -> std::path::PathBuf {
     std::path::Path::new(&dir).join(crate::app::GHOSTS_FILE)
 }
 
-/// The stored ghosts' text, if there is a file.
+/// The stored ghosts' text, if there is a file. A crash between writing the
+/// temporary copy and renaming it is read back from that copy.
 fn load_ghosts() -> Option<String> {
-    std::fs::read_to_string(ghosts_path()).ok()
+    crate::persist::read_replaced(&ghosts_path())
 }
 
 /// Write the ghosts' text: to a temporary file, then renamed over the old
@@ -553,13 +541,7 @@ fn load_ghosts() -> Option<String> {
 /// logged, never fatal.
 fn save_ghosts(text: &str) {
     let path = ghosts_path();
-    let tmp = path.with_extension("tmp");
-    let written = path
-        .parent()
-        .map_or(Ok(()), std::fs::create_dir_all)
-        .and_then(|()| std::fs::write(&tmp, text))
-        .and_then(|()| std::fs::rename(&tmp, &path));
-    if let Err(e) = written {
+    if let Err(e) = write_atomic(&path, text) {
         godot_warn!("racer: could not save {}: {e}", path.display());
     }
 }
@@ -760,7 +742,7 @@ impl Racer {
             self.runs_dir.clone()
         };
         let path = std::path::Path::new(&dir).join(name);
-        match std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&path, text)) {
+        match write_atomic(&path, text) {
             Ok(()) => {
                 godot_print!("racer: run saved to {}", path.display());
             }
@@ -837,11 +819,8 @@ impl Racer {
             match e {
                 Effect::SaveControls(modern) => {
                     let path = user_path("controls.txt");
-                    let tmp = path.with_extension("tmp");
                     let text = if modern { "touch\n" } else { "buttons\n" };
-                    if let Err(e) =
-                        std::fs::write(&tmp, text).and_then(|()| std::fs::rename(&tmp, &path))
-                    {
+                    if let Err(e) = write_atomic(&path, text) {
                         godot_warn!("racer: could not save controls: {e}");
                     }
                 }
