@@ -37,19 +37,51 @@ env:
   GODOT_VERSION: 4.7.2
 
 jobs:
+  # macOS bills at 10x Linux on this private repo. Every push to main runs
+  # it. A pull request runs it only when the sim (the thing the determinism
+  # digest covers) might have moved; a Godot-only pull request does not.
+  sim-changes:
+    name: sim paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      macos: ${{ steps.filter.outputs.macos }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: filter
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        shell: bash
+        run: |
+          set -eu
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "macos=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git diff --name-only "$BASE" HEAD > changed.txt
+          if grep -Eq '^(crates/racer-sim/|rust-toolchain.toml|Cargo\.lock|Cargo\.toml)' changed.txt; then
+            echo "macos=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "macos=false" >> "$GITHUB_OUTPUT"
+          fi
+
   # The sim crate must build and test with no engine present, on every
   # platform we ship to.
   sim:
     name: sim (${{ matrix.os }})
+    needs: [sim-changes]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        # macOS bills at 10x Linux on this private repo. Pull requests run
-        # Linux and Windows; pushes to main add macOS, so an Apple-only
-        # determinism leak still turns main red before anything ships.
-        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest","windows-latest"]' || '["ubuntu-latest","macos-latest","windows-latest"]') }}
+        # Three platforms when sim-changes says so (main, or a pull request
+        # that touches the sim). Otherwise Linux and Windows only.
+        os: ${{ fromJSON(needs.sim-changes.outputs.macos == 'true' && '["ubuntu-latest","macos-latest","windows-latest"]' || '["ubuntu-latest","windows-latest"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -145,7 +177,7 @@ jobs:
   # matrix and the Android emulator (iOS joins once the game ships there).
   determinism:
     name: determinism across platforms
-    needs: [sim, sim-android]
+    needs: [sim, sim-android, sim-changes]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -155,8 +187,9 @@ jobs:
           merge-multiple: true
       - name: compare digests
         env:
-          # One per `sim` matrix entry plus `sim-android`; pull requests skip macOS.
-          EXPECTED: ${{ github.event_name == 'pull_request' && 3 || 4 }}
+          # One per `sim` matrix entry plus `sim-android`. macOS is in the
+          # matrix when sim-changes says so, which makes this 4 rather than 3.
+          EXPECTED: ${{ needs.sim-changes.outputs.macos == 'true' && 4 || 3 }}
         run: |
           set -eu
           found=0
