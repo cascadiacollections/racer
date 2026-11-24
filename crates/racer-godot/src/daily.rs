@@ -212,7 +212,10 @@ mod tests {
             }
         ));
         let text = r.encode();
-        assert_eq!(text, "racer-daily 1\n100 1 2 3 20000\n");
+        assert_eq!(
+            text,
+            format!("racer-daily 1\n100 {} 2 3 20000\n", racer_sim::SIM_EPOCH)
+        );
         assert_eq!(DailyRecord::decode(&text), r);
         // The next day starts afresh.
         assert_eq!(

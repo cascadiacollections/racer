@@ -1693,7 +1693,10 @@ mod tests {
         start(&mut g);
         let fx = finish_then_lose(&mut g, weave);
         let text = ghosts_saved(&fx).expect("the finish was kept");
-        assert!(text.starts_with("racer-ghosts 1\ng 1 "), "{text}");
+        assert!(
+            text.starts_with(&format!("racer-ghosts 1\ng {} ", racer_sim::SIM_EPOCH)),
+            "{text}"
+        );
         let key = (g.seed, 0, 0);
         let first = g.ghosts().get(key).unwrap().ticks;
         assert_eq!(first, g.run.as_ref().unwrap().results()[0].ticks);

@@ -200,6 +200,56 @@ append `(epoch, digest)` to `EPOCHS` (never edit an entry that has reached
 `main`), and add a line here.
 
 - **Epoch 1:** the first M1 sim. Epoch digest: `0x7038998bdfbbe7ab`.
+- **Epoch 2:** the drift-corner test times the corner it claims to test.
+  Epoch digest: `0x47fb6d4a4a467568`. Saved runs, ghosts and the track
+  cache from epoch 1 do not replay; the daily record resets with them.
+
+## Drift-corner timing (epoch 2)
+
+The two-bot test (DESIGN §2.5) is "lose at least 1.5 s over this corner, or
+run out of time before the corner is through", measured from 30 segments
+before it to 40 after. Two mistakes in that measurement:
+
+- A grip-only timeout anywhere on the track was credited to every later
+  drift corner the bot never reached. On a sample of 24 seeds, 12 accepted
+  drift tracks carried a corner the grip bot had not entered. The corner
+  shipped as proven.
+- The window was allowed to end in the runoff past the finish line. Those
+  segments are never driven, so both traces missed the end and the loss
+  read as zero. A corner that really cost the 1.5 s could fail, and the
+  ladder would repair or redraw a track it should have kept. Seed 2's hard
+  final fork was one: it is now the second fresh draw instead of a repair.
+
+The window now ends at the finish line. "Ran out of time" counts only when
+the timed grip run entered that corner's window and did not clear it. When
+the timed run dies before a window, the loss is measured on a second
+grip-only drive whose allotments cannot expire before the race cap; the bot
+does not read the timer, so that drive is the timed one continued. A corner
+the grip bot still never reaches fails the draft. Corners that were driven
+and are short of 1.5 s are tightened, as before.
+
+`cargo run -p racer-sim --bin batch -- --seeds 200` after the change (K = 16,
+4 threads):
+
+- 1,800 tracks: 1,015 first draw, 732 later draw, 31 repaired, 22 fallback
+  (1.22%, gate ≤ 2%), 0 unvalidated. Epoch 1 was 1,009 / 736 / 31 / 24
+  (1.33%).
+- Human run failure: 38 of 1,000 holdout runs (3.8%, band 3–15%; epoch 1
+  was 3.9%), lost on track index [1, 3, 14, 10, 10].
+- Drift-required corners on accepted tracks: 1,365 verified, 1,342 first
+  time and 23 after tightening. The grip-only bot ran out of time inside
+  the window on 74 (epoch 1 reported 202, counting timeouts that happened
+  before the corner) and lost 1.50/2.46/6.11 s (min/mean/max) on the rest.
+  11 candidates rejected for a corner that stayed undemanding (epoch 1: 41).
+- The four bundled courses re-prove to the same timers. Only their stamps
+  moved, because the stamp carries the epoch. `MADE_IN` stays 1: the
+  recipes fork epoch 1's roads.
+
+Pinned track digests are unchanged except seed 2, track 4 branch 1.
+The determinism corpus (200 runs, 431,715 logged inputs, 0 replay
+divergences) now hashes to `0x4e212342b9780fe7`. Epoch 1's was
+`0x4a5c1bcc8fc9fdfb`. The cross-platform job compares platforms with each
+other and does not pin this value.
 
 ## Device power and 120 Hz (2026-10-18)
 

@@ -36,7 +36,9 @@ pub struct Course {
     pub tuning: &'static str,
 }
 
-/// The `SIM_EPOCH` the courses were made and proven in.
+/// The `SIM_EPOCH` the courses were forked and first proven in. Epoch 2
+/// restamped the same roads and the same timers; the recipes are not re-run,
+/// because a later epoch forks different roads.
 pub const MADE_IN: u32 = 1;
 
 /// The courses, easiest first.
@@ -51,7 +53,7 @@ pub const COURSES: [Course; 4] = [
             "23ZZZKG5ZZZZW00ZZSFJR888A4G90120008CC8H2CRMK96PJJJSFZY3ZZ1DPJS9B",
             "6PJ54RKH2080J09022H5462399YVZFZZZZR0BVZZ9ZMWQDJWPB5JJPPCSH208048",
             "JJJ31GRE31TE3ZDZYZZZZZG06N015JW0X4GTW0F750JA06Y06J06H2R1E005F092",
-            "8J4H4928J4P00S2R02JH00A6D1GDQC787N5W",
+            "8J4H4928J4P00S2R02JH00A6DP8M0SE8766M",
         ),
         origin: "fork:0x0000000000000003:0:0:e1",
         tuning: "a puddle on the straight after the first gate",
@@ -67,7 +69,7 @@ pub const COURSES: [Course; 4] = [
             "0CCC8C448400101GGGHJHHKJKKKMACX6WKTFZZZZ01F202B48GY82D06982Q0HP6",
             "M16Q0BN043C0MW0K80M40HM2404700AY8J4H4928J400AY0928J4H49280NR015G",
             "KKKKG2M0348J4H4928J4H4928J4H800AD3G1G40680014402K01J201VJ0C2009D",
-            "C0V80CGR02YQ00YYG0F7R07G53NB8TA94AB8",
+            "C0V80CGR02YQ00YYG0F7R07G5PAQ772X0AP0",
         ),
         origin: "fork:0x0000000000000005:2:1:e1",
         tuning: "none: the generated road as it is",
@@ -83,7 +85,7 @@ pub const COURSES: [Course; 4] = [
             "GGHHK2CA8MMKB9B9F1YQZZZFZVFZ5X71TEK1MTAA884A0CSMMNNPVDJXQDSFDZW7",
             "ZXFZZZZ00WE02B4Y3S09C0JD0F40AJ44Q06P83SC0QR0KM0HC0K8243W02QG4H49",
             "28J400AY4928J4H4903G004P0EEEE04B0340J4H4928G01BRH4928J4H4905001B",
-            "RJ000KQQ02X80CGG04YJ1CG02AC05A01J0G05GA00GD806AM03AYJHP4BB0SRPY",
+            "RJ000KQQ02X80CGG04YJ1CG02AC05A01J0G05GA00GD806AM03AYZTX2N2WTKJA",
         ),
         origin: "fork:0x0000000000000007:3:0:e1",
         tuning: "gravel laid over the drift corner",
@@ -99,8 +101,8 @@ pub const COURSES: [Course; 4] = [
             "V9GRC55454420G044C8MH6JJPJPPSCPBDZ9ZTZZZZY02MW04P9W11M13G1CS0470",
             "VP5VG105041C0S80Q40JM0HC3P08G034660049G4H4928J4H4800NW8J4H4928J4",
             "G23H4928J4H4928J4H4928J4H4928J4H40GW928J4H4928G01BR14928J04G0349",
-            "SSSSRG005N880J2034401SV04A0340026A1K01J300BTW017CG0E28066XEGNY28",
-            "20MMH0",
+            "SSSSRG005N880J2034401SV04A0340026A1K01J300BTW017CG0E28066XV1TV4Y",
+            "60R860",
         ),
         origin: "fork:0x0000000000000008:4:0:e1",
         tuning: "the last traffic car taken off",
@@ -198,6 +200,30 @@ mod tests {
         for (k, l) in layouts().into_iter().enumerate() {
             let (proven, _) = recipe(k).prove().unwrap();
             assert_eq!(proven, l, "course {k}");
+        }
+    }
+
+    /// Re-prove the codes that ship, without re-forking them. An epoch bump
+    /// changes the stamp and nothing else about a course whose road still
+    /// proves; paste the printed code over that course's `code`.
+    #[test]
+    #[ignore = "prints restamped share codes for the courses that ship"]
+    fn print_restamped_codes() {
+        for c in COURSES {
+            let l = Layout::from_code(c.code).unwrap();
+            let old_allot = l.proof.as_ref().unwrap().allot_ticks.clone();
+            match l.prove() {
+                Ok((p, _)) => {
+                    let allot = p.proof.as_ref().unwrap().allot_ticks.clone();
+                    println!(
+                        "---- {} allot_same={} ----\n{}\n",
+                        p.name,
+                        allot == old_allot,
+                        p.to_code().unwrap()
+                    );
+                }
+                Err(e) => println!("---- {} FAILED {e} ----", l.name),
+            }
         }
     }
 
