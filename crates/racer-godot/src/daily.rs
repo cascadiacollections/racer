@@ -68,37 +68,65 @@ pub struct DailyRecord {
     pub best: Option<Score>,
 }
 
+/// What a `daily.txt` is. A damaged file is not the same as another epoch:
+/// the bytes could not be read, and the caller should keep them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DailyText {
+    /// This epoch's record. An empty file is an empty record.
+    Record(DailyRecord),
+    /// A well-formed record from another sim epoch. Not damage: the next
+    /// save may replace the file, which is how an epoch bump resets the day.
+    OtherEpoch,
+    /// Not a record. Keep the bytes.
+    Damaged,
+}
+
 impl DailyRecord {
     /// Read [`DailyRecord::encode`]'s text; anything else, or another
     /// epoch's, is no record.
     pub fn decode(text: &str) -> DailyRecord {
-        DailyRecord::parse(text).unwrap_or_default()
+        match DailyRecord::classify(text) {
+            DailyText::Record(r) => r,
+            DailyText::OtherEpoch | DailyText::Damaged => DailyRecord::default(),
+        }
     }
 
-    fn parse(text: &str) -> Option<DailyRecord> {
-        let mut lines = text.lines();
-        if lines.next()? != "racer-daily 1" {
-            return None;
+    /// Tell a record, another epoch, and damage apart. [`decode`] still
+    /// collapses the last two to an empty record.
+    pub fn classify(text: &str) -> DailyText {
+        if text.trim().is_empty() {
+            return DailyText::Record(DailyRecord::default());
         }
-        let f: Vec<&str> = lines.next()?.split(' ').collect();
-        let [day, epoch, tries, cleared, ticks] = f[..] else {
-            return None;
+        let mut lines = text.lines();
+        let (Some(header), Some(body)) = (lines.next(), lines.next()) else {
+            return DailyText::Damaged;
         };
-        if epoch.parse::<u32>().ok()? != racer_sim::SIM_EPOCH {
-            return None;
+        if header != "racer-daily 1" || lines.any(|l| !l.trim().is_empty()) {
+            return DailyText::Damaged;
+        }
+        let f: Vec<&str> = body.split(' ').collect();
+        let [day, epoch, tries, cleared, ticks] = f[..] else {
+            return DailyText::Damaged;
+        };
+        let Ok(epoch) = epoch.parse::<u32>() else {
+            return DailyText::Damaged;
+        };
+        if epoch != racer_sim::SIM_EPOCH {
+            return DailyText::OtherEpoch;
         }
         let best = match (cleared, ticks) {
             ("-", "-") => None,
-            _ => Some(Score {
-                cleared: cleared.parse().ok()?,
-                ticks: ticks.parse().ok()?,
-            }),
+            _ => {
+                let (Ok(cleared), Ok(ticks)) = (cleared.parse(), ticks.parse()) else {
+                    return DailyText::Damaged;
+                };
+                Some(Score { cleared, ticks })
+            }
         };
-        Some(DailyRecord {
-            day: day.parse().ok()?,
-            tries: tries.parse().ok()?,
-            best,
-        })
+        let (Ok(day), Ok(tries)) = (day.parse(), tries.parse()) else {
+            return DailyText::Damaged;
+        };
+        DailyText::Record(DailyRecord { day, tries, best })
     }
 
     /// The text form: `racer-daily 1`, then `<day> <epoch> <tries>
@@ -238,5 +266,16 @@ mod tests {
         }
         let other = format!("racer-daily 1\n100 {} 2 - -\n", racer_sim::SIM_EPOCH + 1);
         assert_eq!(DailyRecord::decode(&other), DailyRecord::default());
+        assert_eq!(DailyRecord::classify(&other), DailyText::OtherEpoch);
+        assert_eq!(
+            DailyRecord::classify(""),
+            DailyText::Record(DailyRecord::default())
+        );
+        assert_eq!(DailyRecord::classify("nope"), DailyText::Damaged);
+        assert_eq!(DailyRecord::classify("racer-daily 1\n"), DailyText::Damaged);
+        assert_eq!(
+            DailyRecord::classify(&text),
+            DailyText::Record(DailyRecord::decode(&text))
+        );
     }
 }

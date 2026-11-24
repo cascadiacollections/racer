@@ -154,6 +154,9 @@ fn title(g: &Game, c: &mut Canvas, art: &Art, l: &Layout) -> Vec<Button> {
     if let Some(note) = &g.road_note {
         banner(c, cx, 86, note, RED, 1);
     }
+    if let Some(note) = &g.save_note {
+        banner(c, cx, 96, note, RED, 1);
+    }
     let h = l.hud;
     c.rect(h.x, h.y, h.w, h.h, INK);
     c.text_centred(

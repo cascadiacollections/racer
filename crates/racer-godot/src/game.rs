@@ -33,6 +33,7 @@ use godot::prelude::*;
 use crate::app::{Effect, Game, Mode};
 use crate::audio::{Loops, Sfx, Tune, AMBIENT_FILE, DRIFT_FILE, ENGINE_FILE};
 use crate::builder::{generate, worker_count, Worker};
+use crate::daily::DailyRecord;
 use crate::frame::{frame_cap, tighter_cap, Redraw};
 use crate::input::{self, Event, Intents};
 use crate::perf;
@@ -142,6 +143,9 @@ pub struct Racer {
     /// external files directory on Android (adb can read it), `user://runs`
     /// elsewhere. Set by `godot/platform_services.gd`.
     runs_dir: String,
+    /// A damaged file could not be moved aside, so nothing may be written
+    /// over the save paths until the next launch.
+    hold_saves: bool,
     cap: i32,
     /// The root viewport renders direct to the screen, which Godot draws
     /// upside down, so the texture is drawn mirrored (`direct_to_screen`).
@@ -197,18 +201,17 @@ impl INode2D for Racer {
             #[cfg(debug_assertions)]
             hud_shown: false,
             bench: None,
+            hold_saves: false,
         }
     }
 
     fn ready(&mut self) {
         self.project_cap = Engine::singleton().get_max_fps();
         self.direct_to_screen();
-        if let Some(text) = load_ghosts() {
-            self.g.load_ghosts(&text);
-            godot_print!("racer: {} ghosts loaded", self.g.ghosts().len());
-        }
-        if let Some(text) = crate::persist::read_replaced(&user_path(crate::daily::DAILY_FILE)) {
-            self.g.load_daily(&text);
+        self.load_saved_ghosts();
+        self.load_saved_daily();
+        if crate::persist::keep_aside_damaged_runs(&self.runs_directory()) > 0 {
+            self.g.note_damaged_save();
         }
         let slots = load_layouts_file(crate::editor::store::SLOTS_FILE);
         let draft = load_layouts_file(crate::editor::store::DRAFT_FILE);
@@ -530,12 +533,6 @@ fn ghosts_path() -> std::path::PathBuf {
     std::path::Path::new(&dir).join(crate::app::GHOSTS_FILE)
 }
 
-/// The stored ghosts' text, if there is a file. A crash between writing the
-/// temporary copy and renaming it is read back from that copy.
-fn load_ghosts() -> Option<String> {
-    crate::persist::read_replaced(&ghosts_path())
-}
-
 /// Write the ghosts' text: to a temporary file, then renamed over the old
 /// one, so a crash mid-write leaves the last good file. A failure is
 /// logged, never fatal.
@@ -577,6 +574,9 @@ impl Racer {
     #[func]
     fn set_runs_dir(&mut self, dir: GString) {
         self.runs_dir = dir.to_string();
+        if crate::persist::keep_aside_damaged_runs(std::path::Path::new(&self.runs_dir)) > 0 {
+            self.g.note_damaged_save();
+        }
     }
 
     #[func]
@@ -732,8 +732,39 @@ impl Racer {
     }
 
     /// Write a run file. A failure is logged, never fatal: playtest data is
-    /// a nicety, the game goes on.
-    fn save_run(&self, name: &str, text: &str) {
+    /// a nicety, the game goes on. An existing file that does not parse is
+    /// renamed aside first, and the write itself is atomic.
+    fn save_run(&mut self, name: &str, text: &str) {
+        let dir = self.runs_directory();
+        let path = dir.join(name);
+        if self.hold_saves {
+            godot_warn!(
+                "racer: not writing {}, a damaged save is still in place",
+                path.display()
+            );
+            return;
+        }
+        if path.is_file() {
+            if let Ok(old) = std::fs::read_to_string(&path) {
+                if racer_sim::replay::decode_run(&old).is_err() {
+                    self.keep_aside(&path);
+                }
+            }
+        }
+        if self.hold_saves {
+            return;
+        }
+        match crate::persist::write_atomic(&path, text) {
+            Ok(()) => {
+                godot_print!("racer: run saved to {}", path.display());
+            }
+            Err(e) => {
+                godot_warn!("racer: could not save {}: {e}", path.display());
+            }
+        }
+    }
+
+    fn runs_directory(&self) -> std::path::PathBuf {
         let dir = if self.runs_dir.is_empty() {
             ProjectSettings::singleton()
                 .globalize_path("user://runs")
@@ -741,13 +772,74 @@ impl Racer {
         } else {
             self.runs_dir.clone()
         };
-        let path = std::path::Path::new(&dir).join(name);
-        match write_atomic(&path, text) {
-            Ok(()) => {
-                godot_print!("racer: run saved to {}", path.display());
+        std::path::PathBuf::from(dir)
+    }
+
+    /// Move `path` to a `.corrupt` sidecar. False if it could not be moved:
+    /// further saves are held so the bytes stay put.
+    fn keep_aside(&mut self, path: &std::path::Path) -> bool {
+        match crate::persist::keep_aside(path) {
+            Ok(dest) => {
+                godot_warn!(
+                    "racer: kept damaged {} aside at {}",
+                    path.display(),
+                    dest.display()
+                );
+                self.g.note_damaged_save();
+                true
             }
             Err(e) => {
-                godot_warn!("racer: could not save {}: {e}", path.display());
+                godot_warn!(
+                    "racer: could not move {} aside ({e}); not replacing it",
+                    path.display()
+                );
+                self.hold_saves = true;
+                self.g.note_damaged_save();
+                false
+            }
+        }
+    }
+
+    fn load_saved_ghosts(&mut self) {
+        use racer_sim::ghost::GhostText;
+        let Some((path, text)) = crate::persist::opened_save(&ghosts_path()) else {
+            return;
+        };
+        match racer_sim::ghost::GhostStore::classify(&text, racer_sim::SIM_EPOCH) {
+            GhostText::Clean(store) => {
+                let n = store.len();
+                self.g.load_ghost_store(store);
+                godot_print!("racer: {n} ghosts loaded");
+            }
+            GhostText::Recovered(store) => {
+                if !self.keep_aside(&path) {
+                    return;
+                }
+                let clean = store.encode(racer_sim::SIM_EPOCH);
+                let live = ghosts_path();
+                if let Err(e) = crate::persist::write_atomic(&live, &clean) {
+                    godot_warn!("racer: could not rewrite {}: {e}", live.display());
+                }
+                let n = store.len();
+                self.g.load_ghost_store(store);
+                godot_print!("racer: {n} ghosts kept from a damaged file");
+            }
+            GhostText::Damaged => {
+                self.keep_aside(&path);
+            }
+        }
+    }
+
+    fn load_saved_daily(&mut self) {
+        use crate::daily::DailyText;
+        let Some((path, text)) = crate::persist::opened_save(&user_path(crate::daily::DAILY_FILE))
+        else {
+            return;
+        };
+        match DailyRecord::classify(&text) {
+            DailyText::Record(_) | DailyText::OtherEpoch => self.g.load_daily(&text),
+            DailyText::Damaged => {
+                self.keep_aside(&path);
             }
         }
     }
@@ -836,11 +928,23 @@ impl Racer {
                 Effect::KeepScreenOn(on) => DisplayServer::singleton().screen_set_keep_on(on),
                 Effect::Quit => self.base().get_tree().quit(),
                 Effect::SaveRun { name, text } => self.save_run(&name, &text),
-                Effect::SaveGhosts { text } => save_ghosts(&text),
+                Effect::SaveGhosts { text } => {
+                    if self.hold_saves {
+                        godot_warn!("racer: not writing ghosts, a damaged save is still in place");
+                    } else {
+                        save_ghosts(&text);
+                    }
+                }
                 Effect::SaveDaily { text } => {
-                    let path = user_path(crate::daily::DAILY_FILE);
-                    if let Err(e) = write_atomic(&path, &text) {
-                        godot_warn!("racer: could not save {}: {e}", path.display());
+                    if self.hold_saves {
+                        godot_warn!(
+                            "racer: not writing the daily, a damaged save is still in place"
+                        );
+                    } else {
+                        let path = user_path(crate::daily::DAILY_FILE);
+                        if let Err(e) = write_atomic(&path, &text) {
+                            godot_warn!("racer: could not save {}: {e}", path.display());
+                        }
                     }
                 }
                 Effect::Store { file, text } => {
