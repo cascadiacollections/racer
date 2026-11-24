@@ -31,7 +31,7 @@ use crate::hash::Hasher;
 use crate::input::Input;
 use crate::race::{Phase, Race};
 use crate::replay::{hash_events, Event};
-use crate::solver::{build, Effort};
+use crate::solver::Effort;
 use crate::track::Track;
 use crate::upgrade::{fork_upgrades, upgrade_of, Loadout, Upgrade, UPGRADES};
 
@@ -58,9 +58,23 @@ pub trait Tracks {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Generate;
 
+impl Generate {
+    /// The proven track, or `None` when the ladder and a redraw both fail.
+    /// `None` is a refusal: there is no zero-timer track to race.
+    pub fn proven(run_seed: u64, index: u32, branch: u8) -> Option<Arc<Track>> {
+        crate::solver::playable(run_seed, index, branch, Effort::default())
+            .ok()
+            .map(|b| b.track)
+    }
+}
+
 impl Tracks for Generate {
     fn track(&mut self, run_seed: u64, index: u32, branch: u8) -> Arc<Track> {
-        build(run_seed, index, branch, Effort::default()).track
+        // A replay still has to name a track. The untimed gentle road is
+        // what remains after a refusal: its timer is the race cap, not zero.
+        // The game does not start a race on `None` from [`Generate::proven`].
+        Self::proven(run_seed, index, branch)
+            .unwrap_or_else(|| Arc::new(crate::gen::fallback(run_seed, index, branch).track()))
     }
 }
 

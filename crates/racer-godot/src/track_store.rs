@@ -204,11 +204,11 @@ impl TrackStore {
     /// a miss, keeping what it built.
     pub fn source(self, build: Source) -> Source {
         Arc::new(move |key: Key| match self.load(key) {
-            Some(t) => Arc::new(t),
+            Some(t) => Ok(Arc::new(t)),
             None => {
-                let t = build(key);
+                let t = build(key)?;
                 self.save(key, &t);
-                t
+                Ok(t)
             }
         })
     }
@@ -261,12 +261,12 @@ mod tests {
         let n = builds.clone();
         let build: Source = Arc::new(move |k: Key| {
             n.fetch_add(1, Ordering::SeqCst);
-            Generate.track(k.0, k.1, k.2)
+            Ok(Generate.track(k.0, k.1, k.2))
         });
         let key = (3, 1, 0);
-        let a = TrackStore::new(&dir).source(build.clone())(key);
+        let a = TrackStore::new(&dir).source(build.clone())(key).unwrap();
         // A relaunch: a new store on the same directory.
-        let b = TrackStore::new(&dir).source(build)(key);
+        let b = TrackStore::new(&dir).source(build)(key).unwrap();
         assert_eq!(builds.load(Ordering::SeqCst), 1);
         assert_eq!(*a, *b);
         let _ = std::fs::remove_dir_all(&dir);
@@ -305,7 +305,7 @@ mod tests {
             assert!(s.load(key).is_none(), "damage {i} read as a track");
         }
         // The source rebuilds it and writes it back whole.
-        let back = s.clone().source(crate::builder::generate())(key);
+        let back = s.clone().source(crate::builder::generate())(key).unwrap();
         assert_eq!(*back, *t);
         assert_eq!(s.load(key).as_ref(), Some(&*t));
         let _ = std::fs::remove_dir_all(&dir);
@@ -372,7 +372,7 @@ mod tests {
         let file = scratch("blocked");
         std::fs::write(&file, "not a directory").unwrap();
         let s = TrackStore::new(&file);
-        let t = s.clone().source(crate::builder::generate())((2, 0, 0));
+        let t = s.clone().source(crate::builder::generate())((2, 0, 0)).unwrap();
         assert_eq!(*t, *Generate.track(2, 0, 0));
         assert!(s.load((2, 0, 0)).is_none());
         let _ = std::fs::remove_file(&file);

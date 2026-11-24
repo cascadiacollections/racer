@@ -34,6 +34,9 @@
 //! calibrated and must still pass the floor (its difficulty bands are only
 //! reported: a gentle track is allowed to be easy). A fallback that failed
 //! the floor too would be *unvalidated*; the batch gate requires none.
+//! [`playable`] then redraws with fresh attempts the ladder never uses, and
+//! if those fail too it refuses the track. Nothing in that path is given a
+//! zero timer: a list of zero allotments would end the race on tick 1.
 
 use std::sync::Arc;
 
@@ -50,6 +53,10 @@ use crate::upgrade::{reachable, Loadout};
 
 /// Fresh draws before repairing.
 pub const ATTEMPTS: u32 = 8;
+/// Further fresh draws [`playable`] makes after the ladder, including its
+/// fallback, has failed. Numbered from [`ATTEMPTS`], so a track the ladder
+/// accepts is the same track as before.
+pub const REDRAWS: u32 = 8;
 /// Softenings of the best failed draw before the fallback.
 pub const REPAIRS: u32 = 2;
 /// Tightenings of a drift corner that is not demanding enough.
@@ -255,10 +262,16 @@ pub fn build(run_seed: u64, index: u32, branch: u8, effort: Effort) -> Built {
             failures,
         };
     }
-    let mut track = draft.track();
-    track.set_allotments(vec![0; track.checkpoints().len()]);
+    // No allotments. Zero would be a timer that ends the race on the first
+    // tick; empty means the track was never calibrated. [`playable`] refuses
+    // to hand either to a race.
+    unproven(draft, cost, failures)
+}
+
+/// The ladder's failure: an uncalibrated fallback, marked unvalidated.
+fn unproven(draft: Draft, cost: u64, failures: Vec<Failure>) -> Built {
     Built {
-        track: Arc::new(track),
+        track: Arc::new(draft.track()),
         rung: Rung::Unvalidated,
         report: Report {
             cost,
@@ -266,6 +279,70 @@ pub fn build(run_seed: u64, index: u32, branch: u8, effort: Effort) -> Built {
         },
         failures,
     }
+}
+
+/// Why [`playable`] has no track to race.
+#[derive(Clone, Debug)]
+pub struct Unproven {
+    /// Why each candidate failed, the ladder's and the redraw's.
+    pub failures: Vec<Failure>,
+}
+
+/// A track the game may race.
+///
+/// The ladder first ([`build`]). A track it validates is returned as it
+/// stands, so every seed that already proves is unchanged. An unvalidated
+/// ladder is redrawn with [`REDRAWS`] fresh attempts numbered from
+/// [`ATTEMPTS`], which the ladder never generates. If those fail too, the
+/// caller gets [`Err`] and must not start a race: there is no zero-timer
+/// stand-in.
+pub fn playable(run_seed: u64, index: u32, branch: u8, effort: Effort) -> Result<Built, Unproven> {
+    let built = build(run_seed, index, branch, effort);
+    if built.rung != Rung::Unvalidated {
+        return Ok(built);
+    }
+    extra_draws(
+        run_seed,
+        index,
+        branch,
+        effort,
+        ATTEMPTS..ATTEMPTS + REDRAWS,
+        built.failures,
+    )
+}
+
+/// Validate `attempts` as fresh draws. An empty iterator refuses at once.
+fn extra_draws(
+    run_seed: u64,
+    index: u32,
+    branch: u8,
+    effort: Effort,
+    attempts: impl IntoIterator<Item = u32>,
+    mut failures: Vec<Failure>,
+) -> Result<Built, Unproven> {
+    let seed = track_seed(run_seed, index, branch);
+    let loadouts = reachable(run_seed, index, branch);
+    let mut cost = 0u64;
+    for attempt in attempts {
+        let draft = generate(run_seed, index, branch, attempt);
+        match validate(&draft, index, &loadouts, seed, effort, true) {
+            Ok((track, mut report)) => {
+                cost += report.cost;
+                report.cost = cost;
+                return Ok(Built {
+                    track,
+                    rung: Rung::Drawn(attempt),
+                    report,
+                    failures,
+                });
+            }
+            Err((f, c)) => {
+                cost += c;
+                failures.push(f);
+            }
+        }
+    }
+    Err(Unproven { failures })
 }
 
 /// Run every check on a draft. `strict` applies the difficulty bands and
@@ -775,5 +852,43 @@ mod tests {
         assert_eq!(b.track.allot_ticks().len(), b.track.checkpoints().len());
         assert!(b.report.fewest_passes >= MARGIN_PASSES);
         assert!(b.report.worst_margin > 0);
+    }
+
+    #[test]
+    fn an_unvalidated_track_is_not_a_one_tick_race() {
+        use crate::car::CarParams;
+        use crate::input::Input;
+        let draft = crate::gen::fallback(1, 0, 0);
+        let zeros = {
+            let mut t = draft.track();
+            t.set_allotments(vec![0; t.checkpoints().len()]);
+            Arc::new(t)
+        };
+        // Stepping this overflows the timer decrement. That is the bug:
+        // a zero list is not a calibration.
+        assert_eq!(Race::new(zeros, CarParams::BASE).timer(), 0);
+        let bare = unproven(draft, 0, Vec::new());
+        assert_eq!(bare.rung, Rung::Unvalidated);
+        assert!(bare.track.allot_ticks().is_empty());
+        let mut race = Race::new(bare.track, CarParams::BASE);
+        assert!(race.timer() > 1);
+        race.step(Input::NEUTRAL);
+        assert_eq!(race.phase(), Phase::Racing);
+    }
+
+    #[test]
+    fn a_proven_track_is_unchanged_and_a_redraw_with_no_attempts_refuses() {
+        let built = build(1, 0, 0, Effort::default());
+        let played = playable(1, 0, 0, Effort::default()).expect("seed 1 proves");
+        assert_eq!(played.rung, built.rung);
+        assert_eq!(
+            crate::track::track_hash(&played.track),
+            crate::track::track_hash(&built.track)
+        );
+        // The redraw machinery, pointed at a draw the ladder already accepts.
+        let again = extra_draws(1, 0, 0, Effort::default(), 0..1, Vec::new()).unwrap();
+        assert!(matches!(again.rung, Rung::Drawn(0)));
+        // Nothing left to draw is a refusal, not a zero-timer track.
+        assert!(extra_draws(1, 0, 0, Effort::default(), 0..0, Vec::new()).is_err());
     }
 }
