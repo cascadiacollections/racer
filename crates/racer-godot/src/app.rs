@@ -260,6 +260,9 @@ pub struct Game {
     /// track index alone, not the clock, so every benchmark drives the same
     /// tracks whatever the frame pacing.
     pub fixed_forks: bool,
+    /// A damaged save was kept aside. Drawn on the title only, so a race
+    /// is unchanged. Cleared when a new run starts: the player has seen it.
+    pub save_note: Option<String>,
 }
 
 /// Seconds the title shows each biome before the next.
@@ -341,7 +344,20 @@ impl Game {
             daily_record: DailyRecord::default(),
             forced_season: None,
             fixed_forks: false,
+            save_note: None,
         }
+    }
+
+    /// A daily, ghost or run file was not trusted. The bytes were kept
+    /// beside it. Play continues on an empty record.
+    pub fn note_damaged_save(&mut self) {
+        self.save_note = Some("SAVED DATA KEPT ASIDE".into());
+        self.fx.push(Effect::Redraw);
+    }
+
+    /// Replace the ghost store with one already decoded.
+    pub fn load_ghost_store(&mut self, store: racer_sim::ghost::GhostStore) {
+        self.ghosts = store;
     }
 
     /// Read the daily record ([`daily::DAILY_FILE`]'s text) at launch.
@@ -925,6 +941,7 @@ impl Game {
     /// daily seed later). The same seed is the same tracks, so whatever was
     /// already built is used at once.
     pub fn start_seed(&mut self, seed: u64, demo: bool) {
+        self.save_note = None;
         self.seed = seed;
         self.request((seed, 0, 0));
         self.mode = Mode::Building;

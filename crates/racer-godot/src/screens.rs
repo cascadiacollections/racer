@@ -151,6 +151,9 @@ fn title(g: &Game, c: &mut Canvas, art: &Art, l: &Layout) -> Vec<Button> {
     banner(c, cx, 62, "EVERY ROAD PROVEN", WHITE, 1);
     // Which of the five looks is rolling by (a twin's, in a season).
     banner(c, cx, 74, scene.look().name(), ICE, 1);
+    if let Some(note) = &g.save_note {
+        banner(c, cx, 86, note, RED, 1);
+    }
     let h = l.hud;
     c.rect(h.x, h.y, h.w, h.h, INK);
     c.text_centred(

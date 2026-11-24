@@ -145,6 +145,57 @@ impl GhostStore {
         }
         store
     }
+
+    /// Tell a readable store from a file whose bytes should be kept.
+    ///
+    /// [`decode`] is lenient and returns an empty store for a bad header, so
+    /// a caller that only uses it cannot tell damage from "no ghosts yet".
+    /// A file that is only another epoch's ghosts is [`GhostText::Clean`] and
+    /// empty: an epoch bump may replace it. A bad line beside a good one is
+    /// [`GhostText::Recovered`]: keep the original, then write the ghosts
+    /// that did parse.
+    pub fn classify(text: &str, epoch: u32) -> GhostText {
+        if text.trim().is_empty() {
+            return GhostText::Clean(GhostStore::new());
+        }
+        let expected = format!("racer-ghosts {GHOST_FILE}");
+        let mut lines = text.lines();
+        if lines.next().map(str::trim_end) != Some(expected.as_str()) {
+            return GhostText::Damaged;
+        }
+        let mut store = GhostStore::new();
+        let mut bad = 0u32;
+        for line in lines {
+            if line.trim().is_empty() {
+                continue;
+            }
+            match decode_line(line) {
+                Some((e, key, g)) if e == epoch => {
+                    store.offer(key, g);
+                }
+                Some(_) => {}
+                None => bad += 1,
+            }
+        }
+        if bad == 0 {
+            GhostText::Clean(store)
+        } else if store.is_empty() {
+            GhostText::Damaged
+        } else {
+            GhostText::Recovered(store)
+        }
+    }
+}
+
+/// How [`GhostStore::classify`] read a file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GhostText {
+    /// Every line was empty, another epoch, or a ghost kept.
+    Clean(GhostStore),
+    /// At least one ghost kept, and at least one line rejected.
+    Recovered(GhostStore),
+    /// Nothing kept, and the file was not a well-formed empty store.
+    Damaged,
 }
 
 /// One `g` line: its epoch, key and ghost.
@@ -370,6 +421,22 @@ mod tests {
         // A truncated last line too.
         text.push_str(&good.lines().nth(1).unwrap()[..20]);
         assert_eq!(GhostStore::decode(&text, 1), s);
+        assert!(matches!(
+            GhostStore::classify(&good, 1),
+            GhostText::Clean(_)
+        ));
+        assert!(matches!(
+            GhostStore::classify("not ghosts\n", 1),
+            GhostText::Damaged
+        ));
+        assert!(matches!(
+            GhostStore::classify(&good, 2),
+            GhostText::Clean(s) if s.is_empty()
+        ));
+        assert!(matches!(
+            GhostStore::classify(&text, 1),
+            GhostText::Recovered(_)
+        ));
     }
 
     #[test]
