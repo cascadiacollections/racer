@@ -213,6 +213,11 @@ pub struct Game {
     pub title_decor: Vec<Decor>,
     cache: TrackCache,
     ready: BTreeSet<Key>,
+    /// Keys the builder refused. Not inserted into the cache and not raced.
+    unproven: BTreeSet<Key>,
+    /// Shown on the title and the fork after a refusal. Absent, the screens
+    /// are unchanged.
+    pub road_note: Option<String>,
     builder: Box<dyn Build>,
     buttons: Vec<Button>,
     acc: f64,
@@ -315,6 +320,8 @@ impl Game {
             title_decor,
             cache: TrackCache::new(),
             ready: BTreeSet::new(),
+            unproven: BTreeSet::new(),
+            road_note: None,
             builder,
             buttons: Vec::new(),
             acc: 0.0,
@@ -522,6 +529,23 @@ impl Game {
         self.ready.contains(&key)
     }
 
+    /// Whether the builder refused `key`.
+    pub fn road_refused(&self, key: Key) -> bool {
+        self.unproven.contains(&key)
+    }
+
+    /// `key` could not be proved. The first track of a run being built sends
+    /// the player back to the title; a fork stays up so the other road can
+    /// still be taken.
+    fn refuse_road(&mut self, key: Key) {
+        self.unproven.insert(key);
+        self.road_note = Some("COULD NOT PROVE THIS ROAD".into());
+        self.fx.push(Effect::Redraw);
+        if self.mode == Mode::Building && key == (self.seed, 0, 0) {
+            self.go_to_title();
+        }
+    }
+
     /// A built track.
     pub fn track(&mut self, key: Key) -> Option<Arc<Track>> {
         use racer_sim::run::Tracks;
@@ -551,7 +575,10 @@ impl Game {
     /// The two tracks of the coming fork, if both are built.
     pub fn fork_ready(&self) -> bool {
         let Some(run) = &self.run else { return false };
-        (0..2).all(|b| self.built((self.seed, run.index() + 1, b)))
+        (0..2).all(|b| {
+            let key = (self.seed, run.index() + 1, b);
+            self.built(key) || self.road_refused(key)
+        })
     }
 
     /// One frame. `delta` is the frame's length in seconds.
@@ -620,6 +647,9 @@ impl Game {
             self.fx.push(Effect::Redraw);
         }
         self.editor.tick(self.clock);
+        for key in self.builder.refused() {
+            self.refuse_road(key);
+        }
         for (key, track) in self.builder.poll() {
             self.cache.insert(key.0, key.1, key.2, track.clone());
             self.ready.insert(key);
@@ -926,6 +956,14 @@ impl Game {
     /// already built is used at once.
     pub fn start_seed(&mut self, seed: u64, demo: bool) {
         self.seed = seed;
+        if self.road_refused((seed, 0, 0)) {
+            // Already refused once. Asking again would not be asked: the
+            // builder has the key, and the answer does not change.
+            self.mode = Mode::Building;
+            self.refuse_road((seed, 0, 0));
+            return;
+        }
+        self.road_note = None;
         self.request((seed, 0, 0));
         self.mode = Mode::Building;
         self.demo = demo.then_some(Demo {
@@ -1182,6 +1220,17 @@ impl Game {
             None
         };
         if let Some(b) = pick {
+            let key = (
+                self.seed,
+                self.run.as_ref().map(|r| r.index() + 1).unwrap_or(0),
+                b,
+            );
+            if self.road_refused(key) {
+                self.road_note = Some("COULD NOT PROVE THIS ROAD".into());
+                self.sfx.push(Sfx::Click);
+                self.fx.push(Effect::Redraw);
+                return;
+            }
             self.sfx.push(Sfx::Click);
             if let Some(run) = &mut self.run {
                 run.fork(b, &mut self.cache);
@@ -1658,6 +1707,21 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn a_refused_first_track_returns_to_the_title_and_does_not_race() {
+        let mut g = game(30.0);
+        g.seed = 7;
+        g.mode = Mode::Building;
+        g.refuse_road((7, 0, 0));
+        assert_eq!(g.mode, Mode::Title);
+        assert!(g.run.is_none());
+        assert_eq!(g.road_note.as_deref(), Some("COULD NOT PROVE THIS ROAD"));
+        // Starting that seed again does not open a race on a stand-in.
+        g.start_seed(7, false);
+        assert_eq!(g.mode, Mode::Title);
+        assert!(g.run.is_none());
     }
 
     #[test]
