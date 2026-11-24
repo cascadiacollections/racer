@@ -31,7 +31,7 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 
 use racer_sim::layout::{Layout, ProveError};
-use racer_sim::run::{Generate, Tracks};
+use racer_sim::run::Generate;
 use racer_sim::solver::Report;
 use racer_sim::track::Track;
 
@@ -54,6 +54,10 @@ pub trait Build {
     }
     /// The tracks finished since the last poll.
     fn poll(&mut self) -> Vec<(Key, Arc<Track>)>;
+    /// Keys refused since the last poll: no proven track, so not raced.
+    fn refused(&mut self) -> Vec<Key> {
+        Vec::new()
+    }
     /// Start proving `layout` as job `job`.
     fn prove(&mut self, job: u64, layout: Layout);
     /// The proofs finished since the last call.
@@ -69,12 +73,13 @@ pub fn worker_count() -> usize {
 }
 
 /// How a worker gets a track: built, or read back from the track store.
-/// Must be a pure function of the key.
-pub type Source = Arc<dyn Fn(Key) -> Arc<Track> + Send + Sync>;
+/// Must be a pure function of the key. `Err` means the key could not be
+/// proved: the caller must not race a stand-in.
+pub type Source = Arc<dyn Fn(Key) -> Result<Arc<Track>, ()> + Send + Sync>;
 
-/// [`Generate`], as a [`Source`].
+/// [`Generate::proven`], as a [`Source`].
 pub fn generate() -> Source {
-    Arc::new(|k: Key| Generate.track(k.0, k.1, k.2))
+    Arc::new(|k: Key| Generate::proven(k.0, k.1, k.2).ok_or(()))
 }
 
 enum Job {
@@ -84,6 +89,8 @@ enum Job {
 
 enum Done {
     Track(Key, Arc<Track>),
+    /// The ladder and a redraw both failed. Not a track to race.
+    Unproven(Key),
     Proof(u64, Box<Proved>),
 }
 
@@ -137,6 +144,7 @@ pub struct Worker {
     /// The keys asked for by [`Build::request`] (or promoted to it).
     requested: BTreeSet<Key>,
     built: Vec<(Key, Arc<Track>)>,
+    refused: Vec<Key>,
     proved: Vec<(u64, Proved)>,
 }
 
@@ -164,6 +172,7 @@ impl Worker {
             asked: BTreeSet::new(),
             requested: BTreeSet::new(),
             built: Vec::new(),
+            refused: Vec::new(),
             proved: Vec::new(),
         }
     }
@@ -173,6 +182,7 @@ impl Worker {
         for d in self.rx.try_iter() {
             match d {
                 Done::Track(k, t) => self.built.push((k, t)),
+                Done::Unproven(k) => self.refused.push(k),
                 Done::Proof(id, p) => self.proved.push((id, *p)),
             }
         }
@@ -180,10 +190,17 @@ impl Worker {
 }
 
 /// One worker's loop.
-fn work(shared: &Shared, done: &Sender<Done>, source: &(dyn Fn(Key) -> Arc<Track> + Send + Sync)) {
+fn work(
+    shared: &Shared,
+    done: &Sender<Done>,
+    source: &(dyn Fn(Key) -> Result<Arc<Track>, ()> + Send + Sync),
+) {
     while let Some(job) = shared.next() {
         let out = match job {
-            Job::Track(key) => Done::Track(key, source(key)),
+            Job::Track(key) => match source(key) {
+                Ok(t) => Done::Track(key, t),
+                Err(()) => Done::Unproven(key),
+            },
             Job::Prove(id, layout) => Done::Proof(id, Box::new(layout.prove())),
         };
         if done.send(out).is_err() {
@@ -224,6 +241,11 @@ impl Build for Worker {
     fn poll(&mut self) -> Vec<(Key, Arc<Track>)> {
         self.drain();
         std::mem::take(&mut self.built)
+    }
+
+    fn refused(&mut self) -> Vec<Key> {
+        self.drain();
+        std::mem::take(&mut self.refused)
     }
 
     fn prove(&mut self, job: u64, layout: Layout) {
@@ -311,6 +333,7 @@ impl<F: FnMut(Key) -> Track> Build for Inline<F> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use racer_sim::run::Tracks;
 
     #[test]
     fn the_worker_builds_what_generate_builds() {
@@ -402,7 +425,7 @@ mod tests {
                 go = cv.wait(go).unwrap();
             }
             seen.lock().unwrap().push(k);
-            Arc::new(racer_sim::track::fixtures::drag_strip())
+            Ok(Arc::new(racer_sim::track::fixtures::drag_strip()))
         });
         let mut w = Worker::with(1, source);
         w.prefetch((1, 0, 0));
@@ -448,6 +471,25 @@ mod tests {
             }
             println!("{n} worker(s): {:?} per fork (20 forks)", total / 20);
         }
+    }
+
+    #[test]
+    fn a_source_that_cannot_prove_is_refused_and_not_delivered() {
+        let source: Source = Arc::new(|_: Key| Err(()));
+        let mut w = Worker::with(1, source);
+        w.request((1, 0, 0));
+        let mut tracks = Vec::new();
+        let mut refused = Vec::new();
+        for _ in 0..100 {
+            tracks.extend(w.poll());
+            refused.extend(w.refused());
+            if !refused.is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(tracks.is_empty());
+        assert_eq!(refused, vec![(1, 0, 0)]);
     }
 
     #[test]

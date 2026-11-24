@@ -1,14 +1,46 @@
-//! Keep a file the game will not trust, and write a replacement without
-//! cutting the previous bytes in half.
+//! Crash-safe text files, and a place to put one the game will not trust.
 //!
-//! A damaged `daily.txt`, `ghosts.txt` or run file used to be read as an
-//! empty record. The next save then wrote a fresh file over those bytes.
-//! [`keep_aside`] renames the file to a `.corrupt` sidecar (or
-//! `.corrupt-2`, `.corrupt-3`, … if one is already there) and never
-//! overwrites a sidecar. The original path is free for a new record.
+//! A save writes a temporary sibling and renames it over the real file, so a
+//! crash mid-write leaves the previous file. A crash in the gap after that
+//! write and before the rename leaves only the temporary copy: [`read_replaced`]
+//! reads it when the real file is missing.
+//!
+//! A file that is present but not a record used to be treated as empty, and
+//! the next save wrote over the only copy. [`keep_aside`] renames it to a
+//! `.corrupt` sidecar (or `.corrupt-2`, `.corrupt-3`, …) and never overwrites
+//! a sidecar. The original path is then free for a new record.
 
 use std::io;
 use std::path::{Path, PathBuf};
+
+/// Read `path`, or its temporary sibling when the real file is missing.
+pub fn read_replaced(path: &Path) -> Option<String> {
+    std::fs::read_to_string(path)
+        .ok()
+        .or_else(|| std::fs::read_to_string(path.with_extension("tmp")).ok())
+}
+
+/// The file [`read_replaced`] would read: the real path when it exists, else
+/// the temporary sibling. `None` when neither is there.
+pub fn opened_save(path: &Path) -> Option<(PathBuf, String)> {
+    if path.is_file() {
+        return std::fs::read_to_string(path)
+            .ok()
+            .map(|text| (path.to_path_buf(), text));
+    }
+    let tmp = path.with_extension("tmp");
+    std::fs::read_to_string(&tmp).ok().map(|text| (tmp, text))
+}
+
+/// Write `text` to a temporary sibling and rename it over `path`, so a crash
+/// mid-write leaves the previous file.
+pub fn write_atomic(path: &Path, text: &str) -> io::Result<()> {
+    let tmp = path.with_extension("tmp");
+    path.parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| std::fs::write(&tmp, text))
+        .and_then(|()| std::fs::rename(&tmp, path))
+}
 
 /// Rename `path` to a sidecar beside it. `path` itself is gone on success,
 /// and no existing sidecar is replaced.
@@ -31,18 +63,6 @@ pub fn keep_aside(path: &Path) -> io::Result<PathBuf> {
     }
     std::fs::rename(path, &dest)?;
     Ok(dest)
-}
-
-/// Write `text` to a temporary sibling and rename it over `path`, so a crash
-/// mid-write leaves the previous file.
-pub fn write_atomic(path: &Path, text: &str) -> io::Result<()> {
-    let tmp = path.with_extension("tmp");
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(&tmp, text)?;
-    std::fs::rename(&tmp, path)?;
-    Ok(())
 }
 
 /// Run files in `dir` that do not parse. Each is renamed aside. Returns how
@@ -75,11 +95,29 @@ mod tests {
     use super::*;
 
     fn scratch(name: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("racer-keep-aside-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("racer-persist-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn a_missing_file_is_read_from_the_temporary_copy() {
+        let dir = scratch("read");
+        let path = dir.join("ghosts.txt");
+        assert_eq!(read_replaced(&path), None);
+        assert!(opened_save(&path).is_none());
+        std::fs::write(path.with_extension("tmp"), "from the crash window").unwrap();
+        assert_eq!(
+            read_replaced(&path).as_deref(),
+            Some("from the crash window")
+        );
+        let (got, text) = opened_save(&path).unwrap();
+        assert_eq!(got, path.with_extension("tmp"));
+        assert_eq!(text, "from the crash window");
+        std::fs::write(&path, "committed").unwrap();
+        assert_eq!(read_replaced(&path).as_deref(), Some("committed"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

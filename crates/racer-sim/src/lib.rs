@@ -63,14 +63,14 @@ pub mod viz; // ASCII strip of a track, for tuning and snapshots
 /// Enforced rather than remembered: `tests/golden_runs.rs` hashes the pinned
 /// track digests together with the golden-run corpus and asserts the result
 /// is this epoch's entry in [`EPOCHS`]. Every bump gets a line in NOTES.md.
-pub const SIM_EPOCH: u32 = 1;
+pub const SIM_EPOCH: u32 = 2;
 
 /// Every epoch's digest, oldest first. Append-only: a sim change appends
 /// `(SIM_EPOCH, digest)` after bumping `SIM_EPOCH`; an existing entry is never
 /// edited, so a digest cannot be replaced without a bump. The tests check
 /// that the last entry is `SIM_EPOCH`, that no digest repeats, and that each
 /// is recorded in NOTES.md.
-pub const EPOCHS: &[(u32, u64)] = &[(1, 0x7038_998b_dfbb_e7ab)];
+pub const EPOCHS: &[(u32, u64)] = &[(1, 0x7038_998b_dfbb_e7ab), (2, 0x47fb_6d4a_4a46_7568)];
 
 /// The digest `SIM_EPOCH` vouches for: the last entry of [`EPOCHS`].
 pub const EPOCH_DIGEST: u64 = EPOCHS[EPOCHS.len() - 1].1;
