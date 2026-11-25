@@ -41,7 +41,7 @@
 use std::sync::Arc;
 
 use crate::bot::human::{HumanBot, HumanPlan};
-use crate::bot::perfect::{perfect_run, PerfectRun, LEAD};
+use crate::bot::perfect::{perfect_drive, perfect_run, PerfectRun, LEAD};
 use crate::bot::{corners, drive};
 use crate::gen::calibrate::{calibrate, weakest, CALIBRATION_TRIALS};
 use crate::gen::difficulty::{required_margin, PERFECT_LEFT, SKILL_GAP};
@@ -435,12 +435,23 @@ pub fn check(untimed: &Track, rules: &Rules, drift_repairs: u32, cost: &mut u64)
         strict,
         perfect_left: band,
     } = *rules;
-    // 1. Calibrate on the weakest loadout.
+    // 1. Calibrate on the weakest loadout. With one loadout there is nothing
+    // to choose between, so the perfect bot is not sent out to choose.
     let untimed = Arc::new(untimed.clone());
-    let (calib_on, _, c) = weakest(&untimed, loadouts);
-    *cost += c;
-    let Some(cal) = calibrate(&untimed, calib_on, seed, margin, effort.calibration) else {
-        return Checked::Failed(Failure::Undrivable);
+    let (calib_on, searched) = match loadouts {
+        [only] => (*only, None),
+        _ => {
+            let w = weakest(&untimed, loadouts);
+            *cost += w.cost;
+            (w.loadout, Some(w.search))
+        }
+    };
+    let cal = match calibrate(&untimed, calib_on, seed, margin, effort.calibration) {
+        Ok(cal) => cal,
+        Err(spent) => {
+            *cost += spent;
+            return Checked::Failed(Failure::Undrivable);
+        }
     };
     *cost += cal.cost;
     if cal.crashed * 4 > effort.calibration {
@@ -450,9 +461,15 @@ pub fn check(untimed: &Track, rules: &Rules, drift_repairs: u32, cost: &mut u64)
     timed.set_allotments(cal.allot.clone());
     let track = Arc::new(timed);
 
-    // 2. Ceiling.
+    // 2. Ceiling. Choosing the loadout already searched this car's drift
+    // plan on the untimed road. If the timer would have stopped none of
+    // that search's drives, searching again would find the same plan, so
+    // only the drive is made again, on the timer.
     let params = calib_on.params();
-    let best = perfect_run(&track, &params, true);
+    let best = match searched {
+        Some(s) if s.envelope.fits(track.allot_ticks()) => perfect_drive(&track, &params, s.plan),
+        _ => perfect_run(&track, &params, true),
+    };
     *cost += best.cost;
     if best.race.phase() != Phase::Finished {
         return Checked::Failed(Failure::PerfectFailed);

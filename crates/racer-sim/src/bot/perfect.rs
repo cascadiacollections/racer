@@ -116,7 +116,8 @@ impl Driver for PerfectBot {
         let (car, track, p) = (race.car(), race.track(), race.params());
         let i = track.index_at(car.z);
         let seg = track.segments()[i];
-        let hw = seg.half_width();
+        let shape = track.shape(i);
+        let hw = shape.half_width;
 
         obstacles(
             track,
@@ -150,7 +151,7 @@ impl Driver for PerfectBot {
         };
         let mut level =
             self.steer
-                .level(target_x, car.x, car.vx, car.v, seg.curvature(), cap, damp);
+                .level(target_x, car.x, car.vx, car.v, shape.curvature, cap, damp);
         let drift = match corner {
             Some((k, c)) => self.drift[k] && i >= c.start && i < c.end,
             None => false,
@@ -196,29 +197,116 @@ pub struct PerfectRun {
 /// beam search finds; without, grip only. The two together are the two-bot
 /// test for drift-required corners (DESIGN §2.5).
 pub fn perfect_run(track: &Arc<Track>, params: &CarParams, allow_drift: bool) -> PerfectRun {
-    let n_corners = corners(track, params).len();
-    let (plan, searched) = if allow_drift && n_corners > 0 {
-        search(track, params, n_corners)
-    } else {
-        (vec![false; n_corners], 0)
-    };
-    let mut bot = PerfectBot::new(track, params, plan.clone());
+    if !allow_drift {
+        return perfect_drive(track, params, Vec::new());
+    }
+    let found = perfect_search(track, params);
+    let mut run = perfect_drive(track, params, found.plan);
+    run.cost += found.cost;
+    run
+}
+
+/// Drive `track` to the end on a drift plan already chosen (missing entries
+/// grip). The run's cost is the drive alone.
+pub fn perfect_drive(track: &Arc<Track>, params: &CarParams, plan: Vec<bool>) -> PerfectRun {
+    let mut bot = PerfectBot::new(track, params, plan);
     let mut race = Race::new(track.clone(), *params);
     let trace = drive_traced(&mut race, &mut bot);
-    let cost = searched + race.tick() as u64;
+    let cost = race.tick() as u64;
     PerfectRun {
-        plan,
+        plan: bot.drift,
         race,
         trace,
         cost,
     }
 }
 
-/// Beam search over drift choices, corner by corner. Returns the best plan
-/// and the ticks simulated finding it.
-fn search(track: &Arc<Track>, params: &CarParams, n_corners: usize) -> (Vec<bool>, u64) {
+/// What the drift search found.
+#[derive(Clone, Debug)]
+pub struct Search {
+    /// The best drift plan, one entry per corner.
+    pub plan: Vec<bool>,
+    /// Ticks simulated finding it.
+    pub cost: u64,
+    /// How late the searched drives ran, gate by gate.
+    pub envelope: Envelope,
+}
+
+/// How late the drives of one drift search reached each gate.
+///
+/// The bot never looks at the timer, so a timer changes a search in one way
+/// only: a drive it stops ranks last. If the timer would have stopped none
+/// of the drives the search made, the same search on the timed track makes
+/// the same drives and picks the same plan. [`Envelope::fits`] is that test,
+/// so a search made before the track had a timer (`gen::calibrate::weakest`)
+/// need not be made again once it has one.
+#[derive(Clone, Debug, Default)]
+pub struct Envelope {
+    /// Per gate, the latest tick any searched drive crossed it on.
+    crossed: Vec<u32>,
+    /// Per gate, one more than the latest tick on which a searched drive
+    /// stopped still short of it; 0 if none did.
+    short: Vec<u32>,
+    /// A searched drive ran into the race cap.
+    capped: bool,
+}
+
+impl Envelope {
+    /// Note one searched drive, as far as it went.
+    fn note(&mut self, race: &Race) {
+        let gates = race.track().checkpoints().len();
+        self.crossed.resize(gates, 0);
+        self.short.resize(gates, 0);
+        for (latest, &s) in self.crossed.iter_mut().zip(race.splits()) {
+            *latest = (*latest).max(s);
+        }
+        match race.phase() {
+            Phase::Racing => {
+                let g = race.next_gate();
+                self.short[g] = self.short[g].max(race.tick() + 1);
+            }
+            Phase::TimeUp => self.capped = true,
+            Phase::Finished => {}
+        }
+    }
+
+    /// Whether a timer of `allot` ticks per section would have let every
+    /// searched drive run exactly as it did.
+    ///
+    /// The timer is `allot[..=g]` summed, less the tick, until gate `g` is
+    /// crossed; a drive is stopped on the first tick that leaves it at zero
+    /// short of the gate. So a gate crossed on tick `s` needs `s` ticks of
+    /// timer, and a drive still short of it on tick `t` needs `t + 1`.
+    pub fn fits(&self, allot: &[u32]) -> bool {
+        if self.capped || self.crossed.len() > allot.len() {
+            return false;
+        }
+        let mut granted = 0u64;
+        self.crossed
+            .iter()
+            .zip(&self.short)
+            .zip(allot)
+            .all(|((&crossed, &short), &a)| {
+                granted += a as u64;
+                crossed as u64 <= granted && short as u64 <= granted
+            })
+    }
+}
+
+/// The best drift plan the beam search finds for `track`, without the drive
+/// that follows it ([`perfect_drive`]).
+pub fn perfect_search(track: &Arc<Track>, params: &CarParams) -> Search {
     let mut cost = 0;
+    let mut envelope = Envelope::default();
     let root = PerfectBot::new(track, params, Vec::new());
+    let n_corners = root.corners().len();
+    if n_corners == 0 {
+        return Search {
+            plan: Vec::new(),
+            cost,
+            envelope,
+        };
+    }
     let starts: Vec<usize> = root
         .corners()
         .iter()
@@ -234,13 +322,17 @@ fn search(track: &Arc<Track>, params: &CarParams, n_corners: usize) -> (Vec<bool
         for (race, bot) in &beam {
             for choice in [false, true] {
                 let (mut race, mut bot) = (race.clone(), bot.clone());
-                bot.drift[k] = choice;
-                bot.replan(track, params);
+                // Gripping is the plan it already has.
+                if choice {
+                    bot.drift[k] = true;
+                    bot.replan(track, params);
+                }
                 while race.phase() == Phase::Racing && race.car().z < until {
                     let input = bot.input(&race);
                     race.step(input);
                     cost += 1;
                 }
+                envelope.note(&race);
                 next.push((race, bot));
             }
         }
@@ -250,7 +342,11 @@ fn search(track: &Arc<Track>, params: &CarParams, n_corners: usize) -> (Vec<bool
         next.truncate(BEAM);
         beam = next;
     }
-    (beam.swap_remove(0).1.drift, cost)
+    Search {
+        plan: beam.swap_remove(0).1.drift,
+        cost,
+        envelope,
+    }
 }
 
 #[cfg(test)]
@@ -278,6 +374,57 @@ mod tests {
         // The traffic car is 400 m up the road at 20 m/s; the bot ends far
         // ahead of it.
         assert!(run.race.car().z > car.z_at(run.race.tick()) + 100.0);
+    }
+
+    /// The solver searches once, before the track has a timer, and skips
+    /// the search on the timed track when the envelope fits. That is only
+    /// sound if, whenever it fits, the timed search would have chosen the
+    /// same plan and so driven the same race.
+    #[test]
+    fn a_search_whose_envelope_fits_the_timer_need_not_be_repeated() {
+        use crate::upgrade::reachable;
+        let (mut fit, mut unfit) = (0, 0);
+        for (seed, index, branch) in [(1, 0, 0), (2, 2, 1), (3, 3, 0), (5, 4, 1)] {
+            let draft = crate::gen::generate(seed, index, branch, 0);
+            let untimed = Arc::new(draft.track());
+            let loadout = *reachable(seed, index, branch).last().unwrap();
+            let params = loadout.params();
+            let found = perfect_search(&untimed, &params);
+            let free = perfect_drive(&untimed, &params, found.plan.clone());
+            assert_eq!(free.race.phase(), Phase::Finished);
+            // Timers from one that the winning drive only just meets (so a
+            // slower branch of the search is stopped) to a generous one.
+            for spare in [0, 12, 60, 240, 1200] {
+                let mut before = 0;
+                let allot: Vec<u32> = free
+                    .race
+                    .splits()
+                    .iter()
+                    .map(|&s| {
+                        let a = s + spare - before;
+                        before = s + spare;
+                        a
+                    })
+                    .collect();
+                let mut timed = (*untimed).clone();
+                timed.set_allotments(allot.clone());
+                let timed = Arc::new(timed);
+                if !found.envelope.fits(&allot) {
+                    unfit += 1;
+                    continue;
+                }
+                fit += 1;
+                let again = perfect_run(&timed, &params, true);
+                let reused = perfect_drive(&timed, &params, found.plan.clone());
+                assert_eq!(again.plan, reused.plan, "{seed}/{index}/{branch} +{spare}");
+                assert_eq!(again.race.phase(), reused.race.phase());
+                assert_eq!(again.race.tick(), reused.race.tick());
+                assert_eq!(again.race.margins(), reused.race.margins());
+                assert_eq!(again.race.log(), reused.race.log());
+                assert_eq!(again.trace.seg_tick, reused.trace.seg_tick);
+            }
+        }
+        assert!(fit >= 4 && unfit >= 4, "{fit} fit, {unfit} did not");
     }
 
     #[test]

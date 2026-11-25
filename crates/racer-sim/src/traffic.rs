@@ -55,14 +55,52 @@ impl TrafficCar {
     /// Where the car is on race tick `tick`, metres along the track.
     #[inline]
     pub fn z_at(&self, tick: u32) -> f64 {
-        self.z0_dm as f64 / 10.0 + self.speed() * (tick as f64 * DT)
+        self.lane().z_at(tick)
+    }
+
+    /// Whether a player car at `(z, x)` overlaps this car on `tick`.
+    #[inline]
+    pub fn hits(&self, tick: u32, z: f64, x: f64) -> bool {
+        self.lane().hits(tick, z, x)
+    }
+
+    /// The car's schedule as floats.
+    #[inline]
+    pub fn lane(&self) -> Lane {
+        Lane {
+            z0: self.z0_dm as f64 / 10.0,
+            speed: self.speed(),
+            x: self.x(),
+        }
+    }
+}
+
+/// A traffic car's schedule converted to metres and seconds once, so the
+/// per-tick lookups divide nothing. `Track` keeps one per car; the values
+/// and the arithmetic are [`TrafficCar`]'s own, so positions are the same
+/// bits either way.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Lane {
+    /// Where the car is when the race starts, metres along the track.
+    pub z0: f64,
+    /// Its constant speed, m/s.
+    pub speed: f64,
+    /// Offset from the centre line, metres, positive right.
+    pub x: f64,
+}
+
+impl Lane {
+    /// Where the car is on race tick `tick`, metres along the track.
+    #[inline]
+    pub fn z_at(&self, tick: u32) -> f64 {
+        self.z0 + self.speed * (tick as f64 * DT)
     }
 
     /// Whether a player car at `(z, x)` overlaps this car on `tick`.
     #[inline]
     pub fn hits(&self, tick: u32, z: f64, x: f64) -> bool {
         crate::dmath::abs(z - self.z_at(tick)) < CAR_LEN
-            && crate::dmath::abs(x - self.x()) < 2.0 * CAR_HALF_WIDTH
+            && crate::dmath::abs(x - self.x) < 2.0 * CAR_HALF_WIDTH
     }
 }
 

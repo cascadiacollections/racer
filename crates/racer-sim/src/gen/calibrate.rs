@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use crate::bot::drive;
 use crate::bot::human::{HumanBot, HumanPlan};
-use crate::bot::perfect::perfect_run;
+use crate::bot::perfect::{perfect_drive, perfect_search, Search};
 use crate::race::{Phase, Race};
 use crate::rng::substream;
 use crate::track::Track;
@@ -38,20 +38,47 @@ pub const QUANTUM: u32 = 30;
 /// Tag for calibration noise seeds: "CALI" in ASCII.
 pub const CALIBRATION_TAG: u64 = 0x4341_4C49;
 
-/// The loadout among `loadouts` on which the perfect bot is slowest, and
-/// the ticks it took. Ties go to the first, so the choice is deterministic.
-/// Also returns the ticks simulated finding out.
-pub fn weakest(track: &Arc<Track>, loadouts: &[Loadout]) -> (Loadout, u32, u64) {
-    let (mut worst, mut slowest, mut cost) = (loadouts[0], 0, 0u64);
+/// The loadout the perfect bot is slowest on ([`weakest`]).
+#[derive(Clone, Debug)]
+pub struct Weakest {
+    /// The loadout.
+    pub loadout: Loadout,
+    /// The ticks the perfect bot took on it.
+    pub ticks: u32,
+    /// Its drift search, which the solver reuses once the track has a timer
+    /// (`bot::perfect::Envelope`).
+    pub search: Search,
+    /// Ticks simulated over every loadout.
+    pub cost: u64,
+}
+
+/// The loadout among `loadouts` on which the perfect bot is slowest. Ties
+/// go to the first, so the choice is deterministic.
+///
+/// # Panics
+///
+/// If `loadouts` is empty.
+pub fn weakest(track: &Arc<Track>, loadouts: &[Loadout]) -> Weakest {
+    let mut worst: Option<Weakest> = None;
+    let mut cost = 0u64;
     for &l in loadouts {
-        let run = perfect_run(track, &l.params(), true);
+        let params = l.params();
+        let search = perfect_search(track, &params);
+        let run = perfect_drive(track, &params, search.plan.clone());
         let ticks = run.race.tick();
-        cost += run.cost;
-        if ticks > slowest {
-            (worst, slowest) = (l, ticks);
+        cost += search.cost + run.cost;
+        if worst.as_ref().is_none_or(|w| ticks > w.ticks) {
+            worst = Some(Weakest {
+                loadout: l,
+                ticks,
+                search,
+                cost: 0,
+            });
         }
     }
-    (worst, slowest, cost)
+    let mut worst = worst.expect("a track is met with at least one loadout");
+    worst.cost = cost;
+    worst
 }
 
 /// The result of a calibration.
@@ -68,14 +95,15 @@ pub struct Calibrated {
 }
 
 /// Calibrate `track` (untimed) for `loadout` with `margin` ticks of required
-/// margin. `None` if any trial fails to finish: the human cannot drive it.
+/// margin. `Err` if any trial fails to finish: the human cannot drive it.
+/// The error is the ticks simulated finding that out.
 pub fn calibrate(
     track: &Arc<Track>,
     loadout: Loadout,
     seed: u64,
     margin: u32,
     trials: u64,
-) -> Option<Calibrated> {
+) -> Result<Calibrated, u64> {
     let params = loadout.params();
     let plan = HumanPlan::new(track, &params);
     let gates = track.checkpoints().len();
@@ -91,7 +119,7 @@ pub fn calibrate(
         );
         cost += race.tick() as u64;
         if race.phase() != Phase::Finished {
-            return None;
+            return Err(cost);
         }
         for (k, &s) in race.splits().iter().enumerate() {
             splits[k].push(s);
@@ -111,7 +139,7 @@ pub fn calibrate(
         allot.push(at - before);
         before = at;
     }
-    Some(Calibrated {
+    Ok(Calibrated {
         allot,
         finishes,
         crashed,
@@ -122,6 +150,7 @@ pub fn calibrate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bot::perfect::perfect_run;
     use crate::car::CarParams;
     use crate::track::fixtures;
 
@@ -140,8 +169,8 @@ mod tests {
     fn the_weakest_loadout_is_the_slowest_one() {
         let t = Arc::new(fixtures::sweep_and_hairpin());
         let fast = Loadout::BASE.with(crate::upgrade::Upgrade::Engine);
-        let (w, ticks, _) = weakest(&t, &[fast, Loadout::BASE]);
-        assert_eq!(w, Loadout::BASE);
-        assert_eq!(ticks, perfect_run(&t, &CarParams::BASE, true).race.tick());
+        let w = weakest(&t, &[fast, Loadout::BASE]);
+        assert_eq!(w.loadout, Loadout::BASE);
+        assert_eq!(w.ticks, perfect_run(&t, &CarParams::BASE, true).race.tick());
     }
 }

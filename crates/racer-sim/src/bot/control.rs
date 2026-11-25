@@ -127,13 +127,13 @@ pub struct Obstacle {
 /// tick `tick`, into `out` (cleared first).
 pub fn obstacles(track: &Track, tick: u32, from: f64, to: f64, out: &mut Vec<Obstacle>) {
     out.clear();
-    for c in track.traffic() {
+    for c in track.lanes() {
         let z = c.z_at(tick);
         if z + CAR_LEN >= from && z - CAR_LEN <= to {
             out.push(Obstacle {
                 z,
-                speed: c.speed(),
-                x: c.x(),
+                speed: c.speed,
+                x: c.x,
                 half_len: CAR_LEN / 2.0,
                 half_width: CAR_HALF_WIDTH,
             });
@@ -141,16 +141,13 @@ pub fn obstacles(track: &Track, tick: u32, from: f64, to: f64, out: &mut Vec<Obs
     }
     let first = track.index_at(from.max(0.0));
     let last = track.index_at(to.max(0.0)) + 1;
-    for o in track.objects_in(first, last) {
-        let r = o.kind.radius();
-        out.push(Obstacle {
-            z: o.z(),
-            speed: 0.0,
-            x: o.x(),
-            half_len: r,
-            half_width: r,
-        });
-    }
+    out.extend(track.placed_in(first, last).iter().map(|o| Obstacle {
+        z: o.z,
+        speed: 0.0,
+        x: o.x,
+        half_len: o.radius,
+        half_width: o.radius,
+    }));
 }
 
 /// Seconds until a car at `z` doing `v` reaches an obstacle overlapping the
