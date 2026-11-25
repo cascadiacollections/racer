@@ -287,6 +287,10 @@ jobs:
       # the generator no longer makes is a hand edit or a stale run.
       - name: generated audio is up to date
         run: python3 tools/gen_audio.py --check
+      # Cargo.toml, the F-Droid preset and fdroid/version.txt. The android
+      # job rewrites version lines later, in its own checkout.
+      - name: F-Droid version
+        run: python3 tools/check_fdroid_version.py
       # tools/ is standard library only, so there is no lockfile to pin ty in;
       # the exact version here keeps new ty releases from failing unrelated PRs.
       - name: type check the Python tools
@@ -391,8 +395,11 @@ jobs:
           RUN_NUMBER: ${{ github.run_number }}
         run: |
           set -eu
-          # Android and Android Shareware carry the same version (tier.rs);
-          # read the first and rewrite both.
+          # Android, Android Shareware and F-Droid share a version name.
+          # Read the first and rewrite every version/code and version/name
+          # line in this throwaway checkout. The committed F-Droid code stays
+          # the fdroid/version.txt scheme; tools/check_fdroid_version.py
+          # checks that on the tree as committed.
           base=$(sed -n 's/^version\/name="\(.*\)"$/\1/p' export_presets.cfg | head -n 1)
           test -n "$base"
           name="$base-dev.$RUN_NUMBER"

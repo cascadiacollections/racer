@@ -8,6 +8,8 @@
 
 <!-- Navigation badges, not live status: public badge services cannot read
 this private repository. -->
+<!-- TODO: once this repository is public, remove the private-repository
+wording in the comment above. -->
 
 A portrait, retro pseudo-3D roguelike racer in which every generated track is
 **proven drivable** by a human-like bot before you see it.
@@ -20,7 +22,7 @@ after the feel slice (DESIGN §7).
 | ![Drifting through a signed right-hand carousel: yellow kerbs, chevron signs, the DRIFT banner and the drift charge bar, with the touch pads below](docs/screens/drift-corner.png) | ![The fork after track 1: an easier road with the charger upgrade beside a harder one with the engine upgrade, each with a map and its length, gates, drift corners, crests, cars and time](docs/screens/fork.png) | ![The car on a gravel run-in beside the road, the timer running low, with the left, right, brake and drift pads](docs/screens/race.png) |
 
 Pixel 10 captures (dev build, DEMO and a playtest run), scaled to 2× the
-game's 180-pixel-wide buffer. The art is placeholder pixel art drawn in code.
+game's 180-pixel-wide buffer. The pictures are drawn in code.
 
 - **Play:** a run is five generated tracks of about a minute against a
   checkpoint timer. After each, the road forks: an easier track or a harder
@@ -34,8 +36,9 @@ game's 180-pixel-wide buffer. The art is placeholder pixel art drawn in code.
   Android emulator.
 
 **Status: early prototype, milestone 2.** Playable on Android phones from the
-first track to the fifth. No sound yet, placeholder art, balance moving
-between builds, and not on any store. The [development build](https://github.com/cascadiacollections/racer/releases/tag/dev)
+first track to the fifth. Sound and music are generated (`tools/gen_audio.py`),
+the pictures are drawn in code, balance is still moving between builds, and
+it is not on any store. The [development build](https://github.com/cascadiacollections/racer/releases/tag/dev)
 follows `main`.
 
 [Build and run](#build-and-run) · [Controls](#controls) ·
@@ -105,6 +108,38 @@ pins it.
 
 A CI build and a local build are signed with different keys, so going from
 one to the other needs an uninstall, which deletes saved runs.
+
+### F-Droid
+
+The `F-Droid` export preset is only for the F-Droid build. It is a separate
+install, `com.cascadiacollections.racer.foss`, so it sits beside the store
+builds `com.cascadiacollections.racer` and
+`com.cascadiacollections.racer.shareware`. It is the full edition (no
+`shareware` feature). The export is non-Gradle and unsigned
+(`package/signed=false`). Its custom template is `android_release.apk`, which
+the F-Droid recipe builds with scons and which is not committed. F-Droid
+signs the APK. This repository does not, and reproducible builds are not
+used.
+
+F-Droid builds the Godot editor and the arm64 Android release template from
+the 4.7.2 source. The stripped engine release asset
+([docs/godot-templates.md](docs/godot-templates.md)) is only for this
+repository's CI and `just android` builds.
+
+`fdroid/version.txt` is what F-Droid's update check reads. For a `vX.Y.Z`
+tag the version code is `X*100000000 + Y*1000000 + Z*10000 + 9999` (v0.1.0
+is 1009999) and the version name is `X.Y.Z`. That name matches `Cargo.toml`
+and the F-Droid preset. The store presets keep their own version codes.
+`python3 tools/check_fdroid_version.py` fails if the three disagree. CI's
+dev versioning rewrites every `version/code` and `version/name` line in its
+throwaway checkout, including this preset.
+
+Listing text and screenshots live in `fastlane/metadata/android/en-US/`.
+The three phone screenshots are the captures above, copied at 360×808. That
+is wider than 320 px and not 9:16. The recipe draft, with a commit
+placeholder, is `fdroid/com.cascadiacollections.racer.foss.yml`. Nothing here
+submits the app or makes a release. The project has no icon yet, so the
+preset sets no launcher icons and `project.godot` sets no `config/icon`.
 
 ## Controls
 
@@ -251,8 +286,11 @@ One codebase builds two editions. `crates/racer-godot/src/tier.rs` is the only p
 The simulation never sees the tier. Tracks depend only on `(run_seed, index, branch)`, so a seed
 drives the same roads in both editions up to the cap. The `Linux Shareware` and `Android
 Shareware` presets are copies of the full ones with the `shareware` custom feature and a
-`.shareware` application ID. Keep their versions in step with the full presets. CI's dev
-versioning rewrites both.
+`.shareware` application ID. Keep their version names and version codes in step with the
+full presets. The `F-Droid` preset keeps the same version name. Its version code is the
+scheme in `fdroid/version.txt`, not the store presets' version code. CI's dev versioning
+rewrites every `version/code` and `version/name` line, including the F-Droid preset, in
+its throwaway checkout.
 
 ```bash
 just run-shareware               # play the shareware edition locally
@@ -270,6 +308,7 @@ racer is MIT ([LICENSE](LICENSE)). It ships with:
 | [glam](https://github.com/bitshifter/glam-rs) | MIT or Apache-2.0 | [third_party/glam-LICENSE-MIT.txt](third_party/glam-LICENSE-MIT.txt) |
 | [libc](https://github.com/rust-lang/libc) (desktop builds) | MIT or Apache-2.0 | [third_party/libc-LICENSE-MIT.txt](third_party/libc-LICENSE-MIT.txt) |
 | [godot-device-power](https://github.com/KevinTCoughlin/godot-device-power) | MIT | [addons/device_power/LICENSE](addons/device_power/LICENSE) |
+| Audio in `art/audio/` | MIT | Generated by [tools/gen_audio.py](tools/gen_audio.py), covered by [LICENSE](LICENSE) |
 
 `racer-sim` has no dependencies. `cargo deny check` (`just deny`) holds the
 crate graph to `deny.toml`. The site's [licenses page](site/licenses.html)

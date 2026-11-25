@@ -8,3 +8,5 @@ __pycache__/
 # Godot's Android build template (just android-template).
 /android/build/
 /android/.build_version
+# Template the F-Droid recipe builds with scons. Not a committed engine.
+/android_release.apk

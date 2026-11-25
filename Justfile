@@ -87,12 +87,21 @@ check-audio:
 deny:
     cargo deny check
 
+# Cargo.toml, the F-Droid preset and fdroid/version.txt must agree.
+check-fdroid-version:
+    python3 tools/check_fdroid_version.py
+
 # ------------------------------------------------------------------ Android
 #
 # Godot 4.7.2's Gradle build template, arm64 only; release exports carry
 # racer's stripped engine when tools/godot_templates.lock.json pins one
 # (docs/godot-templates.md). Always the SDK's adb: mixing it with a system
 # adb kills the server.
+#
+# These recipes export the "Android" and "Android Shareware" presets. The
+# "F-Droid" preset is separate (non-Gradle, unsigned, its own application
+# id). Its version name stays in step with the Android presets; its version
+# code is fdroid/version.txt (`just check-fdroid-version`).
 
 android_sdk := env("ANDROID_HOME", home_directory() / "Android/Sdk")
 android_ndk := env("ANDROID_NDK_HOME", `ls -d "${ANDROID_HOME:-$HOME/Android/Sdk}"/ndk/* 2>/dev/null | sort -V | tail -1`)

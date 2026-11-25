@@ -1,0 +1,3 @@
+0.1.0
+
+First listing of the early prototype. Five generated tracks, drift, forks and upgrades. Sound and music are included. Balance and the name may still change.
