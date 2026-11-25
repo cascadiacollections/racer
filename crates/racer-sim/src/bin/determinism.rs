@@ -34,7 +34,7 @@ use racer_sim::hash::Hasher;
 use racer_sim::replay::Replay;
 use racer_sim::rng::mix64;
 use racer_sim::run::{autoplay, state_hash, RunPhase, TrackCache, Tracks};
-use racer_sim::solver::{build, Effort};
+use racer_sim::solver::{build, Effort, Rung};
 use racer_sim::track::track_hash;
 
 /// Run seeds.
@@ -58,6 +58,7 @@ fn build_all() -> TrackCache {
         .collect();
     let next = AtomicUsize::new(0);
     let cache = Mutex::new(TrackCache::new());
+    let refused = Mutex::new(None);
     let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
     std::thread::scope(|s| {
         for _ in 0..threads {
@@ -66,11 +67,22 @@ fn build_all() -> TrackCache {
                 let Some(&(seed, index, branch)) = keys.get(k) else {
                     break;
                 };
-                let track = build(seed, index, branch, Effort::default()).track;
-                cache.lock().unwrap().insert(seed, index, branch, track);
+                let built = build(seed, index, branch, Effort::default());
+                if built.rung == Rung::Unvalidated {
+                    *refused.lock().unwrap() = Some((seed, index, branch));
+                    break;
+                }
+                cache
+                    .lock()
+                    .unwrap()
+                    .insert(seed, index, branch, built.track);
             });
         }
     });
+    if let Some((seed, index, branch)) = refused.into_inner().unwrap() {
+        eprintln!("refusing unvalidated track seed {seed} track {index}.{branch}");
+        std::process::exit(1);
+    }
     cache.into_inner().unwrap()
 }
 
@@ -107,7 +119,14 @@ fn main() {
     for n in 0..SEEDS {
         for i in 0..TRACKS {
             for b in 0..if i == 0 { 1 } else { 2 } {
-                digest.write_u64(track_hash(&tracks.track(run_seed(n), i, b)));
+                let track = tracks.track(run_seed(n), i, b).unwrap_or_else(|e| {
+                    eprintln!(
+                        "refusing unproven track seed {} track {i}.{b}: {e:?}",
+                        run_seed(n)
+                    );
+                    std::process::exit(1);
+                });
+                digest.write_u64(track_hash(&track));
             }
         }
     }
@@ -116,7 +135,10 @@ fn main() {
     for n in 0..SEEDS {
         for player in 0..PLAYERS {
             let seed = run_seed(n);
-            let played = autoplay(seed, player, &mut tracks);
+            let played = autoplay(seed, player, &mut tracks).unwrap_or_else(|e| {
+                eprintln!("run {n}/{player}: refusing an unproven track ({e:?})");
+                std::process::exit(1);
+            });
             let played_hash = state_hash(&played);
             let replay = Replay::of(&played);
             match replay.final_hash(&mut tracks) {

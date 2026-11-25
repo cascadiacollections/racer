@@ -98,13 +98,17 @@ pub fn decode(key: Key, text: &str) -> Option<Track> {
         .map(|a| a.parse::<u32>().ok())
         .collect::<Option<Vec<u32>>>()?;
     let layout = Layout::from_code(field("code")?).ok()?;
-    if layout.proof.is_some() || !(allot.is_empty() || allot.len() == layout.checkpoints.len()) {
+    // Empty or zero allotments are not a calibration. Loading one would
+    // hand the game a track the prover did not pass.
+    if layout.proof.is_some()
+        || allot.is_empty()
+        || allot.len() != layout.checkpoints.len()
+        || allot.contains(&0)
+    {
         return None;
     }
     let mut track = layout.track().ok()?;
-    if !allot.is_empty() {
-        track.set_allotments(allot);
-    }
+    track.set_allotments(allot);
     (track_hash(&track) == digest).then_some(track)
 }
 
@@ -231,7 +235,7 @@ mod tests {
     #[test]
     fn generated_tracks_round_trip_exactly() {
         for key in [(1, 0, 0), (7, 2, 1), (0xdead_beef, 4, 0), (42, 3, 1)] {
-            let built = Generate.track(key.0, key.1, key.2);
+            let built = Generate.track(key.0, key.1, key.2).expect("proves");
             let text = encode(key, &built).expect("a generated road is a layout");
             let back = decode(key, &text).expect("reads back");
             assert_eq!(back, *built, "{key:?}");
@@ -247,11 +251,25 @@ mod tests {
         for seed in 1..=40u64 {
             for (i, b) in std::iter::once((0, 0)).chain((1..5).flat_map(|i| [(i, 0), (i, 1)])) {
                 let key = (seed, i, b);
-                let built = Generate.track(seed, i, b);
+                let built = Generate.track(seed, i, b).expect("proves");
                 let back = encode(key, &built).and_then(|t| decode(key, &t));
                 assert_eq!(back.as_ref(), Some(&*built), "{key:?}");
             }
         }
+    }
+
+    #[test]
+    fn an_uncalibrated_or_zero_timer_is_not_loaded() {
+        let key = (1, 0, 0);
+        let mut bare = racer_sim::track::fixtures::drag_strip();
+        let empty = encode(key, &bare).unwrap();
+        assert!(decode(key, &empty).is_none(), "no allotments");
+        bare.set_allotments(vec![0]);
+        let zeros = encode(key, &bare).unwrap();
+        assert!(decode(key, &zeros).is_none(), "a zero timer");
+        bare.set_allotments(vec![120]);
+        let timed = encode(key, &bare).unwrap();
+        assert_eq!(decode(key, &timed).as_ref(), Some(&bare));
     }
 
     #[test]
@@ -261,7 +279,7 @@ mod tests {
         let n = builds.clone();
         let build: Source = Arc::new(move |k: Key| {
             n.fetch_add(1, Ordering::SeqCst);
-            Ok(Generate.track(k.0, k.1, k.2))
+            Generate.track(k.0, k.1, k.2).map_err(|_| ())
         });
         let key = (3, 1, 0);
         let a = TrackStore::new(&dir).source(build.clone())(key).unwrap();
@@ -277,7 +295,7 @@ mod tests {
         let dir = scratch("damage");
         let s = TrackStore::new(&dir);
         let key = (5, 0, 0);
-        let t = Generate.track(5, 0, 0);
+        let t = Generate.track(5, 0, 0).expect("proves");
         assert!(s.save(key, &t));
         let good = std::fs::read_to_string(s.path(key)).unwrap();
         let damaged = [
@@ -314,7 +332,7 @@ mod tests {
     #[test]
     fn another_epoch_is_a_miss() {
         let key = (8, 1, 1);
-        let t = Generate.track(8, 1, 1);
+        let t = Generate.track(8, 1, 1).expect("proves");
         let text = encode(key, &t).unwrap();
         let this = format!("epoch {} ", racer_sim::SIM_EPOCH);
         let other = text.replace(&this, &format!("epoch {} ", racer_sim::SIM_EPOCH + 1));
@@ -330,7 +348,8 @@ mod tests {
     fn the_store_keeps_only_the_most_recently_used() {
         let dir = scratch("evict");
         let s = TrackStore::with_capacity(&dir, 3);
-        let t = racer_sim::track::fixtures::drag_strip();
+        let mut t = racer_sim::track::fixtures::drag_strip();
+        t.set_allotments(vec![120]);
         let at = |secs: u64| SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs);
         for seed in 1..=3u64 {
             assert!(s.save((seed, 0, 0), &t));
@@ -373,7 +392,7 @@ mod tests {
         std::fs::write(&file, "not a directory").unwrap();
         let s = TrackStore::new(&file);
         let t = s.clone().source(crate::builder::generate())((2, 0, 0)).unwrap();
-        assert_eq!(*t, *Generate.track(2, 0, 0));
+        assert_eq!(*t, *Generate.track(2, 0, 0).expect("proves"));
         assert!(s.load((2, 0, 0)).is_none());
         let _ = std::fs::remove_file(&file);
     }

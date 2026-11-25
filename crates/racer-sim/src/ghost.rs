@@ -487,7 +487,7 @@ mod tests {
         use crate::bot::human::{HumanBot, HumanPlan};
         use crate::bot::Driver;
         use crate::run::{Generate, Tracks};
-        let track = Generate.track(11, 0, 0);
+        let track = Generate.track(11, 0, 0).expect("seed 11 proves");
         let loadout = Loadout::BASE;
         let mut race = Race::new(track.clone(), loadout.params());
         let mut bot = HumanBot::new(HumanPlan::new(&track, race.params()), 3);
@@ -506,6 +506,16 @@ mod tests {
         }
         assert_eq!(ghost.race().tick(), race.tick());
         assert_eq!(ghost.race().splits(), race.splits());
+    }
+
+    #[test]
+    fn a_refused_track_is_not_driven_as_a_ghost() {
+        use crate::run::{Generate, Tracks};
+        let _hook = crate::solver::fail_the_floor();
+        assert!(
+            Generate.track(11, 0, 0).is_err(),
+            "no track, so no ghost race"
+        );
     }
 
     #[test]

@@ -377,6 +377,14 @@ impl Editor {
         out
     }
 
+    /// FROM SEED's track could not be proved. Stops the wait.
+    pub fn fork_refused(&mut self, key: Key) {
+        if self.pending_fork == Some(key) {
+            self.pending_fork = None;
+            self.say("COULD NOT PROVE THIS ROAD");
+        }
+    }
+
     /// FROM SEED's track is built.
     pub fn forked(&mut self, key: Key, track: &Track, build: &mut dyn Build) -> Vec<Out> {
         if self.pending_fork != Some(key) {

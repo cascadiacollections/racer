@@ -26,7 +26,7 @@ use crate::car::CarParams;
 use crate::hash::Hasher;
 use crate::input::{Input, STEER_LEVELS};
 use crate::race::{Phase, Race};
-use crate::run::{state_hash, RunPhase, RunState, Tracks};
+use crate::run::{state_hash, RunState, Tracks};
 use crate::track::Track;
 use crate::upgrade::Loadout;
 
@@ -67,8 +67,8 @@ pub fn hash_events(h: &mut Hasher, log: &[Event]) {
     }
 }
 
-/// Why a log failed to replay. `at` is the index of the first event that
-/// could not be applied.
+/// Why a log failed to replay. `at`, where a variant has one, is the index
+/// of the first event that could not be applied.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ReplayError {
     /// An input change logged after the race had already ended.
@@ -82,6 +82,25 @@ pub enum ReplayError {
         /// Index into the log.
         at: usize,
     },
+    /// A generated track in the log did not pass the prover. Nothing was raced.
+    Unproven,
+}
+
+fn open_run(run_seed: u64, tracks: &mut impl Tracks) -> Result<RunState, ReplayError> {
+    RunState::new(run_seed, tracks).map_err(|_| ReplayError::Unproven)
+}
+
+fn take_fork(
+    run: &mut RunState,
+    branch: u8,
+    tracks: &mut impl Tracks,
+    at: usize,
+) -> Result<(), ReplayError> {
+    match run.fork(branch, tracks) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(ReplayError::UnexpectedFork { at }),
+        Err(_) => Err(ReplayError::Unproven),
+    }
 }
 
 /// Something a log of input changes can drive: a race, or a run's current
@@ -178,16 +197,14 @@ impl Replay {
     ///
     /// A [`ReplayError`] naming the first log entry that cannot be applied.
     pub fn reconstruct(&self, tracks: &mut impl Tracks) -> Result<RunState, ReplayError> {
-        let mut run = RunState::new(self.run_seed, tracks);
+        let mut run = open_run(self.run_seed, tracks)?;
         let mut at = 0;
         loop {
             at += feed(&mut run, &self.log[at..], at)?;
             match self.log.get(at) {
                 None => return Ok(run),
                 Some(&Event::Fork { branch }) => {
-                    if run.phase() != RunPhase::Forking || !run.fork(branch, tracks) {
-                        return Err(ReplayError::UnexpectedFork { at });
-                    }
+                    take_fork(&mut run, branch, tracks, at)?;
                     at += 1;
                 }
                 Some(Event::Input { .. }) => unreachable!("feed stops only at a fork or the end"),
@@ -208,7 +225,7 @@ impl Replay {
         observe: impl FnMut(&RunState),
     ) -> Result<RunState, ReplayError> {
         let mut o = Observed {
-            run: RunState::new(self.run_seed, tracks),
+            run: open_run(self.run_seed, tracks)?,
             observe,
         };
         let mut at = 0;
@@ -217,9 +234,7 @@ impl Replay {
             match self.log.get(at) {
                 None => return Ok(o.run),
                 Some(&Event::Fork { branch }) => {
-                    if o.run.phase() != RunPhase::Forking || !o.run.fork(branch, tracks) {
-                        return Err(ReplayError::UnexpectedFork { at });
-                    }
+                    take_fork(&mut o.run, branch, tracks, at)?;
                     at += 1;
                 }
                 Some(Event::Input { .. }) => unreachable!("feed stops only at a fork or the end"),
@@ -536,6 +551,7 @@ fn canonical<T: core::str::FromStr + ToString>(s: &str) -> Option<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::run::RunPhase;
     use crate::track::fixtures;
 
     fn left() -> Input {
@@ -606,7 +622,7 @@ mod tests {
     #[test]
     fn a_run_replays_from_its_seed_and_log() {
         let mut tracks = crate::run::TrackCache::new();
-        let live = crate::run::autoplay(11, 3, &mut tracks);
+        let live = crate::run::autoplay(11, 3, &mut tracks).expect("seed 11 proves");
         assert!(matches!(live.phase(), RunPhase::Won | RunPhase::Lost));
         let replay = Replay::of(&live);
         assert!(
@@ -620,7 +636,7 @@ mod tests {
     #[test]
     fn observing_a_reconstruction_sees_every_tick_and_changes_nothing() {
         let mut tracks = crate::run::TrackCache::new();
-        let live = crate::run::autoplay(11, 3, &mut tracks);
+        let live = crate::run::autoplay(11, 3, &mut tracks).expect("seed 11 proves");
         let replay = Replay::of(&live);
         let mut ticks = 0u64;
         let rebuilt = replay
@@ -634,7 +650,7 @@ mod tests {
     #[test]
     fn a_run_file_round_trips_and_rejects_what_it_would_not_write() {
         let mut tracks = crate::run::TrackCache::new();
-        let live = crate::run::autoplay(5, 1, &mut tracks);
+        let live = crate::run::autoplay(5, 1, &mut tracks).expect("seed 5 proves");
         let f = RunFile {
             epoch: crate::SIM_EPOCH,
             ending: Ending::Quit,
@@ -696,7 +712,7 @@ mod tests {
             Some(ReplayError::UnexpectedFork { at: 1 })
         );
         // And there is never a third road.
-        let live = crate::run::autoplay(11, 3, &mut tracks);
+        let live = crate::run::autoplay(11, 3, &mut tracks).expect("seed 11 proves");
         if live.results().len() > 1 {
             let mut log = Replay::of(&live).log;
             let at = log
@@ -710,6 +726,31 @@ mod tests {
                 Some(ReplayError::UnexpectedFork { at })
             );
         }
+    }
+
+    #[test]
+    fn a_track_that_does_not_prove_is_not_replayed() {
+        struct Refuse;
+        impl Tracks for Refuse {
+            fn track(
+                &mut self,
+                _: u64,
+                _: u32,
+                _: u8,
+            ) -> Result<std::sync::Arc<crate::track::Track>, crate::solver::Unproven> {
+                Err(crate::solver::Unproven {
+                    failures: Vec::new(),
+                })
+            }
+        }
+        let replay = Replay {
+            run_seed: 1,
+            log: Vec::new(),
+        };
+        assert_eq!(
+            replay.reconstruct(&mut Refuse).err(),
+            Some(ReplayError::Unproven)
+        );
     }
 
     #[test]

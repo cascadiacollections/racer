@@ -245,7 +245,17 @@ fn main() -> ExitCode {
             let loadout = d.loadout.unwrap_or_default();
             let (bot, kind) = match &custom {
                 None => {
-                    let track = tracks.track(seed, r.index, d.branch);
+                    let track = match tracks.track(seed, r.index, d.branch) {
+                        Ok(t) => t,
+                        Err(_) => {
+                            eprintln!(
+                                "{path}: track {}/{} did not prove; not racing it",
+                                r.index + 1,
+                                r.branch
+                            );
+                            continue;
+                        }
+                    };
                     let key = seed ^ ((r.index as u64) << 8 | d.branch as u64);
                     (bot_on(&track, key, loadout), Kind::Index(r.index))
                 }

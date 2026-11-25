@@ -394,7 +394,11 @@ impl Game {
             text: self.daily_record.encode(),
         });
         self.start_seed(daily::daily_seed(day), false);
-        self.daily = Some(day);
+        // A road already refused never leaves the title, so it is not a
+        // daily in progress.
+        if self.run.is_some() || self.mode == Mode::Building {
+            self.daily = Some(day);
+        }
     }
 
     /// The daily run on screen ended: keep it if it is the day's best.
@@ -557,6 +561,7 @@ impl Game {
         self.unproven.insert(key);
         self.road_note = Some("COULD NOT PROVE THIS ROAD".into());
         self.fx.push(Effect::Redraw);
+        self.editor.fork_refused(key);
         if self.mode == Mode::Building && key == (self.seed, 0, 0) {
             self.go_to_title();
         }
@@ -565,8 +570,10 @@ impl Game {
     /// A built track.
     pub fn track(&mut self, key: Key) -> Option<Arc<Track>> {
         use racer_sim::run::Tracks;
-        self.built(key)
-            .then(|| self.cache.track(key.0, key.1, key.2))
+        if !self.built(key) {
+            return None;
+        }
+        self.cache.track(key.0, key.1, key.2).ok()
     }
 
     /// Whether anything moves on its own this frame.
@@ -760,9 +767,13 @@ impl Game {
             Mode::Building => {
                 let key = (self.seed, 0, 0);
                 if self.built(key) {
-                    let run = RunState::new(self.seed, &mut self.cache);
-                    self.run = Some(run);
-                    self.begin_race();
+                    match RunState::new(self.seed, &mut self.cache) {
+                        Ok(run) => {
+                            self.run = Some(run);
+                            self.begin_race();
+                        }
+                        Err(_) => self.refuse_road(key),
+                    }
                 }
             }
             Mode::Racing => self.racing(delta, i, confirm, pause),
@@ -1011,9 +1022,21 @@ impl Game {
     }
 
     fn begin_race(&mut self) {
-        let Some(key) = self.track_key() else { return };
         let Some(run) = &self.run else { return };
         let index = run.index();
+        let branch = run.branch();
+        // A generated road with no timer did not pass the prover. A custom
+        // free drive is allowed to be untimed; this is not one.
+        let bare = self.custom.is_none() && run.race().track().allot_ticks().is_empty();
+        if bare {
+            self.go_to_title();
+            self.unproven.insert((self.seed, index, branch));
+            self.road_note = Some("COULD NOT PROVE THIS ROAD".into());
+            self.fx.push(Effect::Redraw);
+            return;
+        }
+        let Some(key) = self.track_key() else { return };
+        let Some(run) = &self.run else { return };
         let track = run.race().track().clone();
         self.watch = Some(Watch::new(run.race()));
         self.biome = match &self.custom {
@@ -1249,9 +1272,11 @@ impl Game {
                 return;
             }
             self.sfx.push(Sfx::Click);
-            if let Some(run) = &mut self.run {
-                run.fork(b, &mut self.cache);
-                self.begin_race();
+            let taken = self.run.as_mut().map(|run| run.fork(b, &mut self.cache));
+            match taken {
+                Some(Ok(true)) => self.begin_race(),
+                Some(Err(_)) => self.refuse_road(key),
+                Some(Ok(false)) | None => {}
             }
         }
     }
@@ -1742,6 +1767,46 @@ mod tests {
     }
 
     #[test]
+    fn a_refused_daily_does_not_start_a_race() {
+        let mut g = game(30.0);
+        let day = 20_744;
+        let seed = daily::daily_seed(day);
+        g.unproven.insert((seed, 0, 0));
+        g.start_daily(day);
+        assert_eq!(g.mode, Mode::Title);
+        assert!(g.run.is_none(), "a refused daily is not raced");
+        assert_eq!(g.daily, None);
+        assert_eq!(g.road_note.as_deref(), Some("COULD NOT PROVE THIS ROAD"));
+    }
+
+    #[test]
+    fn an_uncalibrated_generated_track_is_not_raced_and_spawns_no_ghost() {
+        let mut g = game(30.0);
+        g.seed = 3;
+        g.run = Some(RunState::single(
+            3,
+            Arc::new(fixtures::drag_strip()),
+            CUSTOM_LOADOUT,
+        ));
+        g.begin_race();
+        assert_eq!(g.mode, Mode::Title);
+        assert!(g.run.is_none());
+        assert!(g.ghost().is_none());
+        assert!(g.road_refused((3, 0, 0)));
+    }
+
+    #[test]
+    fn a_refused_from_seed_stops_waiting() {
+        let mut g = game(30.0);
+        g.mode = Mode::Editor;
+        g.editor.pending_fork = Some((9, 0, 0));
+        g.refuse_road((9, 0, 0));
+        assert_eq!(g.mode, Mode::Editor);
+        assert!(g.editor.pending_fork.is_none());
+        assert_eq!(g.editor.note(), Some("COULD NOT PROVE THIS ROAD"));
+    }
+
+    #[test]
     fn a_full_run_forks_on_past_the_shareware_cap() {
         let mut g = game(30.0);
         start(&mut g);
@@ -1830,8 +1895,8 @@ mod tests {
         assert!(g.ghost().is_none(), "nothing was finished: no ghost");
         // And with the real generator: the same seed builds the same track.
         use racer_sim::run::{Generate, Tracks};
-        let a = Generate.track(seed, 0, 0);
-        let b = Generate.track(seed, 0, 0);
+        let a = Generate.track(seed, 0, 0).expect("proves");
+        let b = Generate.track(seed, 0, 0).expect("proves");
         assert_eq!(*a, *b);
     }
 

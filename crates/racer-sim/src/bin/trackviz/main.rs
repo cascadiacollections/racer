@@ -41,7 +41,7 @@ use racer_sim::car::CarParams;
 use racer_sim::dmath;
 use racer_sim::gen::difficulty::{required_margin, TRACKS};
 use racer_sim::race::Race;
-use racer_sim::solver::{build, Effort};
+use racer_sim::solver::{build, Effort, Rung};
 use racer_sim::track::{fixtures, flags, Surface, Track, SEG_LEN};
 use racer_sim::viz::ascii_strip;
 use racer_sim::DT;
@@ -327,6 +327,12 @@ fn main() {
             branch,
         } => {
             let b = build(*seed, *index, *branch, Effort::default());
+            if b.rung == Rung::Unvalidated {
+                eprintln!(
+                    "refusing seed {seed} track {index}.{branch}: it did not pass the prover"
+                );
+                std::process::exit(1);
+            }
             let r = &b.report;
             println!(
                 "run seed {seed}, track {index}.{branch}: {:?}, calibrated on {}, perfect {:.2} s ({:.2} s left), human median {:.2} s, gap {:.1}%",

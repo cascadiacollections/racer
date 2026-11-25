@@ -51,7 +51,15 @@ pub enum RunPhase {
 /// Somewhere to get proven tracks from.
 pub trait Tracks {
     /// The track `(index, branch)` of run `run_seed`, calibrated and proven.
-    fn track(&mut self, run_seed: u64, index: u32, branch: u8) -> Arc<Track>;
+    ///
+    /// [`Err`] means the ladder and a redraw both failed. The caller must
+    /// not race a stand-in: there is no track.
+    fn track(
+        &mut self,
+        run_seed: u64,
+        index: u32,
+        branch: u8,
+    ) -> Result<Arc<Track>, crate::solver::Unproven>;
 }
 
 /// Builds every track it is asked for, with the solver's default effort.
@@ -59,22 +67,25 @@ pub trait Tracks {
 pub struct Generate;
 
 impl Generate {
-    /// The proven track, or `None` when the ladder and a redraw both fail.
-    /// `None` is a refusal: there is no zero-timer track to race.
-    pub fn proven(run_seed: u64, index: u32, branch: u8) -> Option<Arc<Track>> {
-        crate::solver::playable(run_seed, index, branch, Effort::default())
-            .ok()
-            .map(|b| b.track)
+    /// The proven track, or why the ladder and a redraw both failed.
+    /// [`Err`] is a refusal: there is no track to race, zero-timer or not.
+    pub fn proven(
+        run_seed: u64,
+        index: u32,
+        branch: u8,
+    ) -> Result<Arc<Track>, crate::solver::Unproven> {
+        crate::solver::playable(run_seed, index, branch, Effort::default()).map(|b| b.track)
     }
 }
 
 impl Tracks for Generate {
-    fn track(&mut self, run_seed: u64, index: u32, branch: u8) -> Arc<Track> {
-        // A replay still has to name a track. The untimed gentle road is
-        // what remains after a refusal: its timer is the race cap, not zero.
-        // The game does not start a race on `None` from [`Generate::proven`].
+    fn track(
+        &mut self,
+        run_seed: u64,
+        index: u32,
+        branch: u8,
+    ) -> Result<Arc<Track>, crate::solver::Unproven> {
         Self::proven(run_seed, index, branch)
-            .unwrap_or_else(|| Arc::new(crate::gen::fallback(run_seed, index, branch).track()))
     }
 }
 
@@ -98,11 +109,18 @@ impl TrackCache {
 }
 
 impl Tracks for TrackCache {
-    fn track(&mut self, run_seed: u64, index: u32, branch: u8) -> Arc<Track> {
-        self.built
-            .entry((run_seed, index, branch))
-            .or_insert_with(|| Generate.track(run_seed, index, branch))
-            .clone()
+    fn track(
+        &mut self,
+        run_seed: u64,
+        index: u32,
+        branch: u8,
+    ) -> Result<Arc<Track>, crate::solver::Unproven> {
+        if let Some(t) = self.built.get(&(run_seed, index, branch)) {
+            return Ok(t.clone());
+        }
+        let t = Generate.track(run_seed, index, branch)?;
+        self.built.insert((run_seed, index, branch), t.clone());
+        Ok(t)
     }
 }
 
@@ -150,9 +168,13 @@ pub struct RunState {
 
 impl RunState {
     /// A run from `run_seed`, on the start line of its first track.
-    pub fn new(run_seed: u64, tracks: &mut impl Tracks) -> Self {
-        let race = Race::new(tracks.track(run_seed, 0, 0), Loadout::BASE.params());
-        RunState {
+    ///
+    /// # Errors
+    ///
+    /// The first track did not pass the prover. No run is started.
+    pub fn new(run_seed: u64, tracks: &mut impl Tracks) -> Result<Self, crate::solver::Unproven> {
+        let race = Race::new(tracks.track(run_seed, 0, 0)?, Loadout::BASE.params());
+        Ok(RunState {
             run_seed,
             index: 0,
             branch: 0,
@@ -162,7 +184,7 @@ impl RunState {
             race,
             results: Vec::new(),
             past: Vec::new(),
-        }
+        })
     }
 
     /// A run of one track, `track`, driven with `loadout`: a custom race on
@@ -215,22 +237,30 @@ impl RunState {
         (self.phase == RunPhase::Forking).then(|| fork_upgrades(self.run_seed, self.index + 1))
     }
 
-    /// Take fork `branch` (0 or 1) onto the next track. Returns false, and
-    /// changes nothing, unless the run is forking and the branch exists.
-    pub fn fork(&mut self, branch: u8, tracks: &mut impl Tracks) -> bool {
+    /// Take fork `branch` (0 or 1) onto the next track. `Ok(false)`, and
+    /// nothing changes, unless the run is forking and the branch exists.
+    ///
+    /// # Errors
+    ///
+    /// The next track did not pass the prover. The run stays forking.
+    pub fn fork(
+        &mut self,
+        branch: u8,
+        tracks: &mut impl Tracks,
+    ) -> Result<bool, crate::solver::Unproven> {
         if self.phase != RunPhase::Forking || branch > 1 || self.index + 1 >= self.tracks {
-            return false;
+            return Ok(false);
         }
+        let track = tracks.track(self.run_seed, self.index + 1, branch)?;
         self.index += 1;
         self.branch = branch;
         if let Some(u) = upgrade_of(self.run_seed, self.index, branch) {
             self.loadout = self.loadout.with(u);
         }
         self.past.push(Event::Fork { branch });
-        let track = tracks.track(self.run_seed, self.index, branch);
         self.race = Race::new(track, self.loadout.params());
         self.phase = RunPhase::Racing;
-        true
+        Ok(true)
     }
 
     /// The run's seed.
@@ -307,12 +337,16 @@ const PICKS: u64 = 0x5049_434B;
 /// track (its noise from `noise`), and forks are picked at random from the
 /// same seed. Not a good player on purpose: it is the human bot, so it
 /// sometimes loses. `bin/determinism` and the golden runs play with it.
-pub fn autoplay(run_seed: u64, noise: u64, tracks: &mut impl Tracks) -> RunState {
+pub fn autoplay(
+    run_seed: u64,
+    noise: u64,
+    tracks: &mut impl Tracks,
+) -> Result<RunState, crate::solver::Unproven> {
     use crate::bot::human::{HumanBot, HumanPlan};
     use crate::bot::Driver;
     use crate::rng::{substream, Pcg32};
     let mut picks = Pcg32::new(substream(noise, PICKS));
-    let mut run = RunState::new(run_seed, tracks);
+    let mut run = RunState::new(run_seed, tracks)?;
     loop {
         match run.phase() {
             RunPhase::Racing => {
@@ -324,9 +358,11 @@ pub fn autoplay(run_seed: u64, noise: u64, tracks: &mut impl Tracks) -> RunState
                 }
             }
             RunPhase::Forking => {
-                run.fork(picks.range_u32(0, 1) as u8, tracks);
+                if !run.fork(picks.range_u32(0, 1) as u8, tracks)? {
+                    return Ok(run);
+                }
             }
-            RunPhase::Won | RunPhase::Lost => return run,
+            RunPhase::Won | RunPhase::Lost => return Ok(run),
         }
     }
 }
@@ -398,8 +434,8 @@ mod tests {
     #[test]
     fn a_run_forks_and_stacks_upgrades() {
         let mut tracks = TrackCache::new();
-        let mut run = RunState::new(5, &mut tracks);
-        assert!(!run.fork(0, &mut tracks), "no fork while racing");
+        let mut run = RunState::new(5, &mut tracks).expect("seed 5 proves");
+        assert!(!run.fork(0, &mut tracks).unwrap(), "no fork while racing");
         assert_eq!(run.offers(), None);
         // Teleport-free: just drive the first track to its end.
         drive(&mut run);
@@ -407,8 +443,8 @@ mod tests {
             return; // the crude driver lost; nothing more to check here
         }
         let offers = run.offers().expect("forking");
-        assert!(!run.fork(2, &mut tracks));
-        assert!(run.fork(1, &mut tracks));
+        assert!(!run.fork(2, &mut tracks).unwrap());
+        assert!(run.fork(1, &mut tracks).unwrap());
         assert_eq!((run.index(), run.branch()), (1, 1));
         assert_eq!(run.loadout(), Loadout::BASE.with(offers[1]));
         assert_eq!(run.race().params(), &run.loadout().params());
@@ -418,7 +454,7 @@ mod tests {
     #[test]
     fn a_run_that_runs_out_of_time_is_lost() {
         let mut tracks = TrackCache::new();
-        let mut run = RunState::new(5, &mut tracks);
+        let mut run = RunState::new(5, &mut tracks).expect("seed 5 proves");
         // Brake the whole way: the timer must run out.
         while run.phase() == RunPhase::Racing {
             run.step(Input::new(0, true, false));
@@ -429,7 +465,25 @@ mod tests {
         // A lost run ignores input and forks.
         let h = state_hash(&run);
         run.step(Input::NEUTRAL);
-        assert!(!run.fork(0, &mut tracks));
+        assert!(!run.fork(0, &mut tracks).unwrap());
         assert_eq!(state_hash(&run), h);
+    }
+
+    #[test]
+    fn generate_refuses_when_the_fallback_fails_the_floor() {
+        let _hook = crate::solver::fail_the_floor();
+        let built = crate::solver::build(1, 0, 0, Effort::default());
+        assert_eq!(built.rung, crate::solver::Rung::Unvalidated);
+        assert!(
+            built.track.allot_ticks().is_empty(),
+            "an unvalidated fallback is not calibrated"
+        );
+        let err = Generate::proven(1, 0, 0).expect_err("the redraws fail too");
+        assert!(!err.failures.is_empty());
+        let mut gen = Generate;
+        assert!(gen.track(1, 0, 0).is_err());
+        assert!(RunState::new(1, &mut gen).is_err(), "no race is started");
+        // The refusal is not a zero-timer track. There is nothing to step.
+        assert!(Generate.track(1, 0, 0).is_err());
     }
 }
