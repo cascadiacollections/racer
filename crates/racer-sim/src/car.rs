@@ -289,9 +289,10 @@ impl Car {
     /// Advance one tick. Semi-implicit Euler: velocities first, then
     /// positions from the new velocities.
     pub fn step(&mut self, input: Input, track: &Track, p: &CarParams) {
-        let seg = track.segment_at(self.z);
-        let surf = SurfaceParams::of(seg.surface);
-        let hw = seg.half_width();
+        let i = track.index_at(self.z);
+        let shape = track.shape(i);
+        let surf = SurfaceParams::of(track.segments()[i].surface);
+        let hw = shape.half_width;
         let off = crate::dmath::abs(self.x) > hw;
         let off_grip = if off { OFFROAD_GRIP } else { 1.0 };
 
@@ -306,7 +307,7 @@ impl Car {
             acc += BOOST_ACC;
             self.boost_ticks -= 1;
         }
-        let mut a = -G * seg.pitch() - surf.drag;
+        let mut a = -G * shape.pitch - surf.drag;
         if off {
             a -= OFFROAD_DRAG;
         }
@@ -330,7 +331,7 @@ impl Car {
         };
         let authority = cap * off_grip * crate::dmath::clamp(self.v / V_STEER_FULL, 0.0, 1.0);
         let steer = if spinning { 0.0 } else { input.steer() };
-        let ax = steer * authority - seg.curvature() * self.v * self.v - damp * self.vx;
+        let ax = steer * authority - shape.curvature * self.v * self.v - damp * self.vx;
 
         self.v = (self.v + a * DT).max(0.0);
         self.vx += ax * DT;

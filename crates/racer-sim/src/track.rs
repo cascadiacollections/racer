@@ -20,7 +20,7 @@
 //! [`track_hash`] leaves it out (it follows from what is hashed).
 
 use crate::hash::Hasher;
-use crate::traffic::TrafficCar;
+use crate::traffic::{Lane, TrafficCar};
 
 /// Length of one segment, metres. The road's resolution: every shape change,
 /// checkpoint and object sits on a segment boundary.
@@ -138,6 +138,28 @@ impl Object {
     pub fn x(&self) -> f64 {
         self.x_cm as f64 / 100.0
     }
+
+    /// The object in metres.
+    #[inline]
+    pub fn placed(&self) -> Placed {
+        Placed {
+            z: self.z(),
+            x: self.x(),
+            radius: self.kind.radius(),
+        }
+    }
+}
+
+/// An [`Object`] converted to metres once, so the per-tick lookups divide
+/// nothing. `Track` keeps one per object.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Placed {
+    /// Distance along the track, metres.
+    pub z: f64,
+    /// Offset from the centre line, metres, positive right.
+    pub x: f64,
+    /// Radius, metres.
+    pub radius: f64,
 }
 
 /// One 4 m slice of road.
@@ -194,6 +216,29 @@ impl Segment {
     pub fn has(&self, flag: u8) -> bool {
         self.flags & flag != 0
     }
+
+    /// The segment's shape as floats.
+    #[inline]
+    pub fn shape(&self) -> Shape {
+        Shape {
+            curvature: self.curvature(),
+            pitch: self.pitch(),
+            half_width: self.half_width(),
+        }
+    }
+}
+
+/// A [`Segment`]'s shape converted to floats once, so the car and the bots
+/// divide nothing to read the road under them. `Track` keeps one per
+/// segment ([`Track::shape`]); the values are the segment's own.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Shape {
+    /// [`Segment::curvature`], 1/m.
+    pub curvature: f64,
+    /// [`Segment::pitch`], rise over run.
+    pub pitch: f64,
+    /// [`Segment::half_width`], metres.
+    pub half_width: f64,
 }
 
 /// A generated or hand-written track, plus what is derived from it.
@@ -220,6 +265,13 @@ pub struct Track {
     sight: Vec<f64>,
     /// `objects[object_start[i]..object_start[i + 1]]` stand on segment `i`.
     object_start: Vec<u32>,
+    /// Each traffic car's schedule in metres and seconds, in `traffic`'s
+    /// order: what the race and the bots read every tick.
+    lanes: Vec<Lane>,
+    /// Each object in metres, in `objects`' order, for the same readers.
+    placed: Vec<Placed>,
+    /// Each segment's shape in metres, for the same readers.
+    shapes: Vec<Shape>,
 }
 
 impl Track {
@@ -264,6 +316,9 @@ impl Track {
         let elevation = elevation_profile(&segments);
         let sight = sight_lines(&elevation);
         mark_crests(&mut segments, &elevation, &sight);
+        let shapes = segments.iter().map(Segment::shape).collect();
+        let lanes = traffic.iter().map(TrafficCar::lane).collect();
+        let placed = objects.iter().map(Object::placed).collect();
         Track {
             segments,
             checkpoints,
@@ -273,7 +328,16 @@ impl Track {
             elevation,
             sight,
             object_start,
+            lanes,
+            placed,
+            shapes,
         }
+    }
+
+    /// Segment `i`'s shape in metres: [`Segment::shape`], kept.
+    #[inline]
+    pub fn shape(&self, i: usize) -> Shape {
+        self.shapes[i]
     }
 
     /// Every segment, in driving order.
@@ -304,11 +368,16 @@ impl Track {
     /// so a car that has run past the end reads the last segment.
     #[inline]
     pub fn index_at(&self, z: f64) -> usize {
-        let i = crate::dmath::floor(z / SEG_LEN);
-        if i <= 0.0 {
+        // The floor of `q`, without the call: it is 0 or less exactly when
+        // `q < 1`, and from 1 up the cast's truncation is the floor. (`floor`
+        // is a library call on x86-64, and this runs several times a tick.)
+        // The cast saturates, and through `u32` it is the short one; a
+        // track has far fewer than 2³² segments, so the clamp hides it.
+        let q = z / SEG_LEN;
+        if q < 1.0 {
             0
         } else {
-            (i as usize).min(self.segments.len() - 1)
+            (q as u32 as usize).min(self.segments.len() - 1)
         }
     }
 
@@ -360,15 +429,34 @@ impl Track {
 
     /// The objects standing on segments `from..to` (clamped to the track).
     pub fn objects_in(&self, from: usize, to: usize) -> &[Object] {
+        &self.objects[self.object_range(from, to)]
+    }
+
+    /// As [`Track::objects_in`], in metres.
+    #[inline]
+    pub fn placed_in(&self, from: usize, to: usize) -> &[Placed] {
+        &self.placed[self.object_range(from, to)]
+    }
+
+    /// Where the objects on segments `from..to` sit in the object list.
+    #[inline]
+    fn object_range(&self, from: usize, to: usize) -> core::ops::Range<usize> {
         let n = self.segments.len();
         let (a, b) = (from.min(n), to.min(n).max(from.min(n)));
-        &self.objects[self.object_start[a] as usize..self.object_start[b] as usize]
+        self.object_start[a] as usize..self.object_start[b] as usize
     }
 
     /// The traffic.
     #[inline]
     pub fn traffic(&self) -> &[TrafficCar] {
         &self.traffic
+    }
+
+    /// The traffic's schedules as floats, one per car of [`Track::traffic`]
+    /// in the same order.
+    #[inline]
+    pub fn lanes(&self) -> &[Lane] {
+        &self.lanes
     }
 
     /// Elevation at distance `z`, metres, interpolated within the segment.
@@ -728,6 +816,60 @@ mod tests {
         assert_eq!(t.index_at(3.99), 0);
         assert_eq!(t.index_at(4.0), 1);
         assert_eq!(t.index_at(1e9), t.len() - 1);
+    }
+
+    #[test]
+    fn index_at_is_the_floor_it_replaced() {
+        let t = fixtures::drag_strip();
+        let by_floor = |z: f64| {
+            let i = crate::dmath::floor(z / SEG_LEN);
+            if i <= 0.0 {
+                0
+            } else {
+                (i as usize).min(t.len() - 1)
+            }
+        };
+        let end = t.length();
+        let mut zs = vec![
+            f64::NAN,
+            f64::NEG_INFINITY,
+            f64::INFINITY,
+            -1e300,
+            -0.0,
+            0.0,
+            f64::MIN_POSITIVE,
+            1e10,
+            2f64.powi(32) * SEG_LEN,
+            2f64.powi(63) * SEG_LEN,
+            1e300,
+            end,
+        ];
+        for k in 0..=t.len() + 2 {
+            let edge = k as f64 * SEG_LEN;
+            zs.extend([edge - 1e-9, edge, edge + 1e-9, edge + 3.999_999]);
+        }
+        for z in zs {
+            assert_eq!(t.index_at(z), by_floor(z), "z = {z}");
+        }
+    }
+
+    #[test]
+    fn the_kept_floats_are_the_integers_own() {
+        let t = fixtures::hazards();
+        for (i, s) in t.segments().iter().enumerate() {
+            assert_eq!(t.shape(i), s.shape());
+            assert_eq!(t.shape(i).curvature.to_bits(), s.curvature().to_bits());
+        }
+        assert_eq!(t.placed_in(0, t.len()).len(), t.objects().len());
+        for (p, o) in t.placed_in(0, t.len()).iter().zip(t.objects()) {
+            assert_eq!(*p, o.placed());
+        }
+        assert_eq!(t.lanes().len(), t.traffic().len());
+        for (l, c) in t.lanes().iter().zip(t.traffic()) {
+            for tick in [0, 1, 7, 12_345] {
+                assert_eq!(l.z_at(tick).to_bits(), c.z_at(tick).to_bits());
+            }
+        }
     }
 
     #[test]

@@ -149,25 +149,20 @@ impl Race {
         }
         let (z, x) = (self.car.z, self.car.x);
         let seg = self.track.index_at(z);
-        let near = self.track.objects_in(seg.saturating_sub(1), seg + 2);
+        let near = self.track.placed_in(seg.saturating_sub(1), seg + 2);
         let object = near.iter().find(|o| {
-            let r = o.kind.radius();
-            crate::dmath::abs(z - o.z()) < CAR_LEN / 2.0 + r
-                && crate::dmath::abs(x - o.x()) < CAR_HALF_WIDTH + r
+            crate::dmath::abs(z - o.z) < CAR_LEN / 2.0 + o.radius
+                && crate::dmath::abs(x - o.x) < CAR_HALF_WIDTH + o.radius
         });
         let rear_ended = self
             .track
-            .traffic()
+            .lanes()
             .iter()
             .find(|c| c.hits(self.tick, z, x))
-            .map(|c| c.speed());
+            .map(|c| c.speed);
         if let Some(o) = object {
-            let clear = o.kind.radius() + CAR_HALF_WIDTH + 0.05;
-            self.car.x = if x < o.x() {
-                o.x() - clear
-            } else {
-                o.x() + clear
-            };
+            let clear = o.radius + CAR_HALF_WIDTH + 0.05;
+            self.car.x = if x < o.x { o.x - clear } else { o.x + clear };
             self.car.vx = 0.0;
         }
         if object.is_some() || rear_ended.is_some() {

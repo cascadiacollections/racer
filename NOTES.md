@@ -749,3 +749,63 @@ re-specifies the texture the GPU may still read) cut the upload by about
 quarter of the bytes and of the driver's conversion) with a palette-lookup
 canvas shader; the upload is the largest CPU item left, but it needs the
 canvas to keep indices and a shader on the stripped engine.
+
+## Cheaper proofs (2026-11-25)
+
+DESIGN §2.4. The solver proves the same tracks to the same timers in about
+a third less time. Nothing a proof decides moved: the 40-seed batch report
+(every rung, failure, band, margin and drift check), the bundled courses,
+`layout survey` and the determinism digest are identical before and after;
+only tick counts and milliseconds differ.
+
+**Where the time went** (callgrind, `batch --seeds 2`, one thread): the
+perfect bot's drift search 52%, human trials 46%. Per tick: building the
+obstacle list 21%, `floor` 9.5% (a library call on x86-64 without SSE4.1,
+several times a tick through `Track::index_at`), the human's look-ahead
+taking one square root per segment in view.
+
+**Fewer ticks.**
+
+- A track met with one loadout (indices 0 and 1, and every layout) no
+  longer sends the perfect bot out to pick the weakest of one.
+- With several, the weakest loadout's drift search is kept
+  (`calibrate::Weakest`). The bot never reads the timer, so a timer changes
+  a search only by stopping one of its drives. `perfect::Envelope` records
+  how late the search's drives reached each gate; when the calibrated
+  timer would have stopped none of them, the ceiling check drives the kept
+  plan on the timed track instead of searching again. Otherwise it
+  searches as before.
+- The beam search re-planned the speed profile for the grip branch of
+  every corner, which is the plan it already had.
+- A calibration that fails now reports the ticks it spent (it reported
+  none; the weakest-loadout search used to hide that).
+
+**Cheaper ticks**, each the same arithmetic on the same bits:
+
+- `index_at` truncates instead of calling `floor` (tested against the old
+  form at every segment edge, NaN, the infinities and past 2⁶³).
+- `Track` keeps each segment's shape, each object and each traffic car's
+  schedule as floats (`Shape`, `Placed`, `Lane`), so the car, the race and
+  the bots divide nothing per tick.
+- The human's look-ahead takes the lowest `limit² + 2·decel·d` and one
+  root: the square root is exactly rounded, hence monotonic, so the root
+  of the lowest is the lowest root.
+
+**Result** (4-core x86-64 cloud container, release):
+
+| | Before | After |
+|---|---|---|
+| `batch --seeds 6 --threads 1` | 9.15 s | 5.8 s (−36%) |
+| Batch, 40 seeds: mean per track | 164 ms, 1.65M ticks | 106 ms, 1.55M ticks |
+| Batch, 40 seeds: slowest track | 1,183 ms | 724 ms |
+| Track index 0 / 4, mean | 38 / 406 ms | 23 / 268 ms |
+| `layout survey --seeds 6`, prove median / max | 36 / 72 ms | 21 / 39 ms |
+
+Not measured on a phone. arm64 has a `floor` instruction, so expect less
+there from that item; the rest is architecture-neutral.
+
+Not done: the drive after a drift search repeats the winning branch's
+drive whenever no later choice reached back past the car (about a ninth
+of a search), but keeping a trace per branch costs about what it saves.
+The human trials of one loadout are independent and would thread, but the
+batch and the builders already run one proof per core.

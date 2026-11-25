@@ -130,8 +130,9 @@ const MEMORY: usize = 32;
 #[derive(Clone, Debug)]
 pub struct HumanBot {
     plan: Arc<HumanPlan>,
-    /// The plan's limits with this driver's misjudgement of each corner.
-    limits: Vec<f64>,
+    /// The plan's limits with this driver's misjudgement of each corner,
+    /// squared: the look-ahead only ever needs the square.
+    limits_sq: Vec<f64>,
     rng: Pcg32,
     memory: [Seen; MEMORY],
     delay: u32,
@@ -147,8 +148,9 @@ pub struct HumanBot {
 impl HumanBot {
     /// A driver following `plan`, its noise drawn from `seed`.
     pub fn new(plan: Arc<HumanPlan>, seed: u64) -> Self {
+        let mut limits = plan.limits.clone();
         let mut bot = HumanBot {
-            limits: plan.limits.clone(),
+            limits_sq: Vec::new(),
             plan,
             rng: Pcg32::new(seed),
             memory: [Seen::default(); MEMORY],
@@ -164,11 +166,15 @@ impl HumanBot {
         for k in 0..bot.plan.corners.len() {
             if bot.rng.next_f64() < OVERCOOK_CHANCE {
                 let c = bot.plan.corners[k];
-                for l in &mut bot.limits[c.start..c.end] {
+                for l in &mut limits[c.start..c.end] {
                     *l *= OVERCOOK;
                 }
             }
         }
+        for l in &mut limits {
+            *l *= *l;
+        }
+        bot.limits_sq = limits;
         bot
     }
 
@@ -193,17 +199,27 @@ impl HumanBot {
         let sight = track.sight(i);
         let wanted = (LOOK_TIME * seen.v).min(LOOK_MAX);
         let look = wanted.min(sight);
-        let mut v = f64::INFINITY;
+        // The lowest of `sqrt(limit² + 2·decel·d)` over the road in view.
+        // The square root is exactly rounded, so it never reorders two
+        // values: the root of the lowest square is the lowest root, bit for
+        // bit, and one root does for the whole look-ahead.
+        let mut v2 = f64::INFINITY;
         let last = track.index_at(seen.z + look);
-        for j in i..=last {
-            let d = (j as f64 * SEG_LEN - seen.z).max(0.0);
-            let lim = self.limits[j];
-            v = v.min(sqrt(lim * lim + 2.0 * decel * d));
+        let mut edge = i as f64 * SEG_LEN;
+        for &lim2 in self.limits_sq.get(i..=last).unwrap_or(&[]) {
+            let d = (edge - seen.z).max(0.0);
+            let reach2 = lim2 + 2.0 * decel * d;
+            // `f64::min` by hand: no number here is NaN, and the plain
+            // comparison is a single instruction.
+            if reach2 < v2 {
+                v2 = reach2;
+            }
+            edge += SEG_LEN;
         }
         if sight < wanted {
-            v = v.min(sqrt(BLIND_SPEED * BLIND_SPEED + 2.0 * decel * look));
+            v2 = v2.min(BLIND_SPEED * BLIND_SPEED + 2.0 * decel * look);
         }
-        v
+        sqrt(v2)
     }
 }
 
@@ -219,7 +235,7 @@ impl Driver for HumanBot {
             vx: car.vx,
         };
         if tick.is_multiple_of(RESAMPLE) {
-            self.resample(track.segment_at(car.z).half_width());
+            self.resample(track.shape(track.index_at(car.z)).half_width);
         }
         if self.lapse > 0 {
             self.lapse -= 1;
@@ -233,7 +249,8 @@ impl Driver for HumanBot {
         let seen = self.memory[tick.saturating_sub(self.delay) as usize % MEMORY];
         let i = track.index_at(seen.z);
         let seg = track.segments()[i];
-        let hw = seg.half_width();
+        let shape = track.shape(i);
+        let hw = shape.half_width;
         let decel = p.brake * self.decel_share;
 
         let look = (LOOK_TIME * seen.v).min(LOOK_MAX).min(track.sight(i));
@@ -272,7 +289,7 @@ impl Driver for HumanBot {
             seen.x,
             seen.vx,
             seen.v,
-            seg.curvature(),
+            shape.curvature,
             cap,
             damp,
         );
