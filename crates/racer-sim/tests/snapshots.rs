@@ -49,7 +49,11 @@ fn generated_track_digests_are_pinned() {
     for (seed, index, branch) in common::pinned_tracks() {
         let b = build(seed, index, branch, Effort::default());
         // The cache must hand out the very track the solver built.
-        let cached = common::tracks().lock().unwrap().track(seed, index, branch);
+        let cached = common::tracks()
+            .lock()
+            .unwrap()
+            .track(seed, index, branch)
+            .expect("pinned");
         assert_eq!(track_hash(&cached), track_hash(&b.track));
         out.push_str(&format!(
             "seed {seed} track {index}.{branch} {:<10} {:016x}\n",

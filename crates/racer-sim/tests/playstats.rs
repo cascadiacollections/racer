@@ -9,7 +9,7 @@ use racer_sim::run::{autoplay, RunPhase, RunState, TrackCache};
 #[test]
 fn playstats_reports_every_driven_track_of_a_finished_run() {
     let mut tracks = TrackCache::new();
-    let run = autoplay(11, 3, &mut tracks);
+    let run = autoplay(11, 3, &mut tracks).expect("seed 11 proves");
     let ending = match run.phase() {
         RunPhase::Won => Ending::Won,
         _ => Ending::Lost,
@@ -90,7 +90,7 @@ fn playstats_replays_custom_races_from_their_layout_and_still_reads_v1() {
     }
     // A version 1 file, as every build before layouts wrote.
     let mut tracks = TrackCache::new();
-    let run = autoplay(4, 1, &mut tracks);
+    let run = autoplay(4, 1, &mut tracks).expect("seed 4 proves");
     let v1 = encode_run(&RunFile {
         epoch: racer_sim::SIM_EPOCH,
         ending: Ending::Lost,

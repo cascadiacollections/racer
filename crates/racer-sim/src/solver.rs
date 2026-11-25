@@ -33,10 +33,12 @@
 //! failed draw's worst section, then the gentle fallback, which is still
 //! calibrated and must still pass the floor (its difficulty bands are only
 //! reported: a gentle track is allowed to be easy). A fallback that failed
-//! the floor too would be *unvalidated*; the batch gate requires none.
-//! [`playable`] then redraws with fresh attempts the ladder never uses, and
-//! if those fail too it refuses the track. Nothing in that path is given a
-//! zero timer: a list of zero allotments would end the race on tick 1.
+//! the floor too is *unvalidated*. [`build`] still returns that rung, so the
+//! batch gate can require none. [`playable`] redraws with fresh attempts the
+//! ladder never uses, and if those fail too it refuses the track.
+//! [`crate::run::Generate`] returns that refusal: nothing unvalidated is
+//! raced. Nothing in that path is given a zero timer: a list of zero
+//! allotments would end the race on tick 1.
 
 use std::sync::Arc;
 
@@ -345,6 +347,41 @@ fn extra_draws(
     Err(Unproven { failures })
 }
 
+#[cfg(test)]
+thread_local! {
+    static FAIL_FLOOR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// While this guard is alive, every candidate fails the floor without being
+/// driven, the fallback included. Tests use it to force a refusal.
+#[cfg(test)]
+pub(crate) struct FailFloor;
+
+#[cfg(test)]
+impl Drop for FailFloor {
+    fn drop(&mut self) {
+        FAIL_FLOOR.with(|c| c.set(false));
+    }
+}
+
+/// Fail the floor of every candidate, including the fallback, until dropped.
+#[cfg(test)]
+pub(crate) fn fail_the_floor() -> FailFloor {
+    FAIL_FLOOR.with(|c| c.set(true));
+    FailFloor
+}
+
+fn floor_is_forced() -> bool {
+    #[cfg(test)]
+    {
+        FAIL_FLOOR.with(|c| c.get())
+    }
+    #[cfg(not(test))]
+    {
+        false
+    }
+}
+
 /// Run every check on a draft. `strict` applies the difficulty bands and
 /// the drift-corner test; the fallback runs without them. On failure,
 /// returns why and the ticks it cost to find out.
@@ -356,6 +393,15 @@ fn validate(
     effort: Effort,
     strict: bool,
 ) -> Result<(Arc<Track>, Report), (Failure, u64)> {
+    if floor_is_forced() {
+        return Err((
+            Failure::Margins {
+                passes: 0,
+                section: 0,
+            },
+            0,
+        ));
+    }
     let rules = Rules {
         margin: required_margin(index),
         loadouts,

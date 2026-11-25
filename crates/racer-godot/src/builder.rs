@@ -77,9 +77,10 @@ pub fn worker_count() -> usize {
 /// proved: the caller must not race a stand-in.
 pub type Source = Arc<dyn Fn(Key) -> Result<Arc<Track>, ()> + Send + Sync>;
 
-/// [`Generate::proven`], as a [`Source`].
+/// [`Generate::proven`], as a [`Source`]. A key that does not prove is
+/// [`Err`]: the worker reports it refused, and the game does not race it.
 pub fn generate() -> Source {
-    Arc::new(|k: Key| Generate::proven(k.0, k.1, k.2).ok_or(()))
+    Arc::new(|k: Key| Generate::proven(k.0, k.1, k.2).map_err(|_| ()))
 }
 
 enum Job {
@@ -348,7 +349,7 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert_eq!(got.len(), 1, "built within 6 s");
-        let direct = Generate.track(7, 0, 0);
+        let direct = Generate.track(7, 0, 0).expect("seed 7 proves");
         assert_eq!(
             racer_sim::track::track_hash(&got[0].1),
             racer_sim::track::track_hash(&direct)

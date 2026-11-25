@@ -156,7 +156,9 @@ fn epoch_digest(run_hashes: impl IntoIterator<Item = u64>) -> u64 {
     let mut h = Hasher::new();
     let mut tracks = common::tracks().lock().unwrap();
     for (seed, index, branch) in common::pinned_tracks() {
-        h.write_u64(track_hash(&tracks.track(seed, index, branch)));
+        h.write_u64(track_hash(
+            &tracks.track(seed, index, branch).expect("pinned"),
+        ));
     }
     for hash in run_hashes {
         h.write_u64(hash);
@@ -220,7 +222,7 @@ fn regenerate() {
     for &(seed, noise) in &SPECS {
         let played = {
             let mut tracks = common::tracks().lock().unwrap();
-            autoplay(seed, noise, &mut *tracks)
+            autoplay(seed, noise, &mut *tracks).expect("the golden run's tracks prove")
         };
         let hash = state_hash(&played);
         let replay = Replay::of(&played);
