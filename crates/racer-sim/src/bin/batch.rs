@@ -95,7 +95,17 @@ fn one_seed(n: u64, effort: Effort) -> SeedResult {
                 if let Some(u) = upgrade_of(seed, index, branch) {
                     loadout = loadout.with(u);
                 }
-                let track = &tracks[index as usize][branch as usize].0.track;
+                let built = &tracks[index as usize][branch as usize].0;
+                // The fallback failed the floor too. Generate refuses this
+                // road; the holdout does not race it either. Count the run
+                // lost here. A zero timer would overflow on the first tick.
+                if built.rung == Rung::Unvalidated
+                    || built.track.allot_ticks().is_empty()
+                    || built.track.allot_ticks().contains(&0)
+                {
+                    return Some(index);
+                }
+                let track = &built.track;
                 let p = loadout.params();
                 let mut race = Race::new(track.clone(), p);
                 let noise = substream(run_tag, index as u64);
