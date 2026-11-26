@@ -294,13 +294,13 @@ pub struct Unproven {
 ///
 /// The ladder first ([`build`]). A track it validates is returned as it
 /// stands, so every seed that already proves is unchanged. An unvalidated
-/// ladder is redrawn with [`REDRAWS`] fresh attempts numbered from
-/// [`ATTEMPTS`], which the ladder never generates. If those fail too, the
-/// caller gets [`Err`] and must not start a race: there is no zero-timer
-/// stand-in.
+/// ladder, or a track handed back with an empty or zero timer, is redrawn
+/// with [`REDRAWS`] fresh attempts numbered from [`ATTEMPTS`], which the
+/// ladder never generates. If those fail too, the caller gets [`Err`] and
+/// must not start a race: there is no zero-timer stand-in.
 pub fn playable(run_seed: u64, index: u32, branch: u8, effort: Effort) -> Result<Built, Unproven> {
     let built = build(run_seed, index, branch, effort);
-    if built.rung != Rung::Unvalidated {
+    if raceable(&built) {
         return Ok(built);
     }
     extra_draws(
@@ -311,6 +311,20 @@ pub fn playable(run_seed: u64, index: u32, branch: u8, effort: Effort) -> Result
         ATTEMPTS..ATTEMPTS + REDRAWS,
         built.failures,
     )
+}
+
+/// Whether `built` passed the prover and carries a real timer.
+///
+/// An unvalidated fallback used to ship with a zero allotment per gate.
+/// [`Race::new`] takes the first allotment as the timer, so that race lost
+/// on the first tick (and the decrement overflowed where checks are on).
+/// Empty is the uncalibrated draft; a zero in the list is the same bug.
+fn raceable(built: &Built) -> bool {
+    let allot = built.track.allot_ticks();
+    built.rung != Rung::Unvalidated
+        && !allot.is_empty()
+        && allot.len() == built.track.checkpoints().len()
+        && allot.iter().all(|&a| a > 0)
 }
 
 /// Validate `attempts` as fresh draws. An empty iterator refuses at once.
@@ -349,32 +363,53 @@ fn extra_draws(
 
 #[cfg(test)]
 thread_local! {
-    static FAIL_FLOOR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// How many coming floor checks to fail without driving. `u32::MAX`
+    /// fails until the guard is dropped.
+    static FAIL_FLOOR: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
-/// While this guard is alive, every candidate fails the floor without being
-/// driven, the fallback included. Tests use it to force a refusal.
+/// While this guard is alive, floor checks fail without being driven.
+/// Dropping it restores the real floor.
 #[cfg(test)]
 pub(crate) struct FailFloor;
 
 #[cfg(test)]
 impl Drop for FailFloor {
     fn drop(&mut self) {
-        FAIL_FLOOR.with(|c| c.set(false));
+        FAIL_FLOOR.with(|c| c.set(0));
     }
 }
 
 /// Fail the floor of every candidate, including the fallback, until dropped.
 #[cfg(test)]
 pub(crate) fn fail_the_floor() -> FailFloor {
-    FAIL_FLOOR.with(|c| c.set(true));
+    FAIL_FLOOR.with(|c| c.set(u32::MAX));
+    FailFloor
+}
+
+/// Fail the next `n` floor checks, then check for real.
+///
+/// `n` is the ladder: [`ATTEMPTS`] draws, [`REPAIRS`] softenings, and the
+/// fallback. The candidate after that is a redraw.
+#[cfg(test)]
+pub(crate) fn fail_the_next_floors(n: u32) -> FailFloor {
+    FAIL_FLOOR.with(|c| c.set(n));
     FailFloor
 }
 
 fn floor_is_forced() -> bool {
     #[cfg(test)]
     {
-        FAIL_FLOOR.with(|c| c.get())
+        FAIL_FLOOR.with(|c| {
+            let n = c.get();
+            if n == 0 {
+                return false;
+            }
+            if n != u32::MAX {
+                c.set(n - 1);
+            }
+            true
+        })
     }
     #[cfg(not(test))]
     {
@@ -953,5 +988,41 @@ mod tests {
         assert!(matches!(again.rung, Rung::Drawn(0)));
         // Nothing left to draw is a refusal, not a zero-timer track.
         assert!(extra_draws(1, 0, 0, Effort::default(), 0..0, Vec::new()).is_err());
+    }
+
+    #[test]
+    fn a_zero_or_empty_timer_is_not_a_track_to_race() {
+        let gentle = crate::gen::fallback(1, 0, 0).track();
+        let zeros = {
+            let mut t = gentle.clone();
+            t.set_allotments(vec![0; t.checkpoints().len()]);
+            t
+        };
+        let as_built = |track, rung| Built {
+            track: Arc::new(track),
+            rung,
+            report: Report::default(),
+            failures: Vec::new(),
+        };
+        assert!(
+            !raceable(&as_built(zeros, Rung::Fallback)),
+            "a zero timer did not pass the floor"
+        );
+        assert!(!raceable(&as_built(gentle, Rung::Unvalidated)));
+        let mut timed = crate::gen::fallback(1, 0, 0).track();
+        let n = timed.checkpoints().len();
+        timed.set_allotments(vec![crate::gen::calibrate::QUANTUM; n]);
+        assert!(raceable(&as_built(timed, Rung::Drawn(0))));
+    }
+
+    #[test]
+    fn a_failed_ladder_is_redrawn_eight_times_and_then_refused() {
+        let _hook = fail_the_floor();
+        let err = playable(1, 0, 0, Effort::default()).expect_err("nothing passes");
+        // 8 draws, 2 repairs, the fallback, then 8 redraws.
+        assert_eq!(
+            err.failures.len(),
+            (ATTEMPTS + REPAIRS + 1 + REDRAWS) as usize
+        );
     }
 }

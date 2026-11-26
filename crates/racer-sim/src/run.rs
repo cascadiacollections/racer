@@ -486,4 +486,46 @@ mod tests {
         // The refusal is not a zero-timer track. There is nothing to step.
         assert!(Generate.track(1, 0, 0).is_err());
     }
+
+    #[test]
+    fn generate_redraws_when_the_fallback_fails_the_floor() {
+        let normal = crate::track::track_hash(&Generate::proven(1, 0, 0).expect("seed 1 proves"));
+        // 8 draws, 2 repairs, then the fallback. The next candidate is a
+        // redraw the ladder never generates, and it has to pass for real.
+        let misses = crate::solver::ATTEMPTS + crate::solver::REPAIRS + 1;
+        let played = {
+            let _hook = crate::solver::fail_the_next_floors(misses);
+            crate::solver::playable(1, 0, 0, Effort::default()).expect("a redraw passes the floor")
+        };
+        assert!(
+            matches!(played.rung, crate::solver::Rung::Drawn(n) if n >= crate::solver::ATTEMPTS),
+            "the redraw is a fresh draw, not the failed fallback: {:?}",
+            played.rung
+        );
+        let redraw = crate::track::track_hash(&played.track);
+        assert_ne!(redraw, normal, "a forced miss must not keep the first draw");
+        let track = {
+            let _hook = crate::solver::fail_the_next_floors(misses);
+            Generate::proven(1, 0, 0).expect("Generate redraws the same way")
+        };
+        assert_eq!(crate::track::track_hash(&track), redraw);
+        assert!(
+            track.allot_ticks().iter().all(|&a| a > 0),
+            "a redraw is calibrated, not a zero timer"
+        );
+        let gentle = crate::gen::fallback(1, 0, 0).track();
+        let same_road = track.len() == gentle.len()
+            && track
+                .segments()
+                .iter()
+                .zip(gentle.segments())
+                .all(|(a, b)| a.curve_milli == b.curve_milli && a.pitch_milli == b.pitch_milli);
+        assert!(!same_road, "the redraw is not the fallback that failed");
+        let mut race = Race::new(track, Loadout::BASE.params());
+        let timer = race.timer();
+        assert!(timer > 1, "the race does not start on a zero timer");
+        race.step(Input::NEUTRAL);
+        assert_eq!(race.phase(), Phase::Racing);
+        assert_eq!(race.timer(), timer - 1);
+    }
 }
