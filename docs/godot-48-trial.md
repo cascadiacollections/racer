@@ -1,11 +1,11 @@
-# Godot 4.8 beta 3 trial
+# Godot 4.8 beta 5 trial
 
 Godot **4.7.2** stays the editor, the CI export, and the stripped Android
 engine. This path does not change `GODOT_VERSION`, `project.godot`'s feature
 list, `racer.gdextension`'s `compatibility_minimum`, the `api-4-7` feature, or
 `tools/godot_templates.lock.json`.
 
-4.8 beta 3 (9 November 2026, commit `c51ff06e8836a70ea905701c081bf94124dcd6ce`)
+4.8 beta 5 (24 November 2026, commit `a661dfdbccc664ccca57ad76c2bb5dcd8f3fc768`)
 is a preview with matching export templates. It is not a migration.
 
 ## What gdext can target
@@ -39,16 +39,16 @@ python3 tools/godot_48_trial.py run
 python3 tools/godot_48_trial.py build-engine --dry-run
 ```
 
-`run` downloads the official Linux editors and export templates for 4.8-beta3
+`run` downloads the official Linux editors and export templates for 4.8-beta5
 and, as a size baseline only, 4.7.2. It checks SHA-512 against the
 godot-builds `SHA512-SUMS.txt` published with each release, then checks:
 
 - editor `--version` (includes the build and the commit, for example
-  `4.8.beta3.official.c51ff06e8`)
+  `4.8.beta5.official.a661dfdbc`)
 - engine commit (that same 9-character prefix)
 - template build key: `templates/version.txt`, the `GODOT_VERSION_FULL_CONFIG`
   string the editor uses as the export-templates directory name
-  (`4.8.beta3`, `4.7.2.stable`). The editor version must start with it.
+  (`4.8.beta5`, `4.7.2.stable`). The editor version must start with it.
 - packaged native libraries in the official templates, including arm64
   `libgodot_android.so`
 - the Rust libraries the export would ship (`linux` debug and release, and
@@ -89,8 +89,8 @@ interpreter against 3.10 before it clones, then checks the requirement in the
 tree it checked out. The stable `just godot-template` command is unchanged
 and still builds 4.7.2.
 
-The clone is `~/.cache/racer/godot-4.8-beta3` (not the 4.7.2 cache). SCons is
-the same pin as the stable recipe, with `GODOT_VERSION_STATUS=beta3` so a
+The clone is `~/.cache/racer/godot-4.8-beta5` (not the 4.7.2 cache). SCons is
+the same pin as the stable recipe, with `GODOT_VERSION_STATUS=beta5` so a
 custom binary is recognized as this beta. The product is
 `build/godot-48-trial/engine/`. It is not locked, attested, or published.
 There is no Android SDK on a typical desk, so this command is for a machine
