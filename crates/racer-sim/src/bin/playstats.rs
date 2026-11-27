@@ -21,6 +21,9 @@
 //! cargo run --release -p racer-sim --bin playstats -- target/runs/*.txt
 //! ```
 //!
+//! A `run-*.tmp` is the same kind of file: the write finished and the
+//! rename over the `.txt` did not. `just pull-runs` passes those too.
+//!
 //! A run the player quit is counted up to the track they abandoned, which is
 //! shown but not counted: its replay runs on past the quit.
 //!

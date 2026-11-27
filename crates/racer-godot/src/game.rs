@@ -213,11 +213,15 @@ impl INode2D for Racer {
         if crate::persist::keep_aside_damaged_runs(&self.runs_directory()) > 0 {
             self.g.note_damaged_save();
         }
-        let slots = load_layouts_file(crate::editor::store::SLOTS_FILE);
-        let draft = load_layouts_file(crate::editor::store::DRAFT_FILE);
-        self.g.load_layouts(slots.as_deref(), draft.as_deref());
-        self.g.modern_touch = std::fs::read_to_string(user_path("controls.txt"))
-            .map_or(true, |s| s.trim() != "buttons");
+        let slots = self.take_save(&layouts_path(crate::editor::store::SLOTS_FILE));
+        let draft = self.take_save(&layouts_path(crate::editor::store::DRAFT_FILE));
+        self.g.load_layouts(
+            slots.as_ref().map(|(_, text)| text.as_str()),
+            draft.as_ref().map(|(_, text)| text.as_str()),
+        );
+        self.g.modern_touch = self
+            .take_save(&user_path("controls.txt"))
+            .is_none_or(|(_, text)| text.trim() != "buttons");
         self.setup_audio();
         self.dev_flags();
         godot_print!(
@@ -428,17 +432,19 @@ fn layouts_path(name: &str) -> std::path::PathBuf {
     std::path::Path::new(&dir).join(name)
 }
 
-/// Read a layouts file, if there is one. A file being replaced when the
-/// app died (only the temporary copy is whole) is read from that copy.
-fn load_layouts_file(name: &str) -> Option<String> {
-    crate::persist::read_replaced(&layouts_path(name))
-}
-
 /// Write (or with `None`, delete) a layouts file: to a temporary file, then
 /// renamed over the old one, so a crash mid-write leaves the last good
-/// file. Returns whether it worked; a failure is logged.
+/// file. Returns whether it worked; a failure is logged. A file that is
+/// not text is left where it is.
 fn store_layouts_file(name: &str, text: Option<&str>) -> bool {
     let path = layouts_path(name);
+    if matches!(
+        crate::persist::opened_save(&path),
+        crate::persist::Opened::Unreadable { .. }
+    ) {
+        godot_warn!("racer: not replacing unreadable {}", path.display());
+        return false;
+    }
     let done = match text {
         Some(text) => write_atomic(&path, text),
         None => {
@@ -732,8 +738,9 @@ impl Racer {
     }
 
     /// Write a run file. A failure is logged, never fatal: playtest data is
-    /// a nicety, the game goes on. An existing file that does not parse is
-    /// renamed aside first, and the write itself is atomic.
+    /// a nicety, the game goes on. An existing file that is not a run,
+    /// including one that is not text, is renamed aside first, and the
+    /// write itself is atomic.
     fn save_run(&mut self, name: &str, text: &str) {
         let dir = self.runs_directory();
         let path = dir.join(name);
@@ -744,12 +751,10 @@ impl Racer {
             );
             return;
         }
-        if path.is_file() {
-            if let Ok(old) = std::fs::read_to_string(&path) {
-                if racer_sim::replay::decode_run(&old).is_err() {
-                    self.keep_aside(&path);
-                }
-            }
+        // Not text, or text that is not a run: the same as a cut-off file.
+        // `read_to_string` failing used to skip this and overwrite the bytes.
+        if path.is_file() && !crate::persist::is_run_file(&path) && !self.keep_aside(&path) {
+            return;
         }
         if self.hold_saves {
             return;
@@ -800,9 +805,35 @@ impl Racer {
         }
     }
 
+    /// Read the save at `path`. A file that is not text is moved aside
+    /// first (and, if that worked, a temporary sibling can still be read).
+    /// `None` when there is nothing to read, or the unreadable file could
+    /// not be moved — in that case it is still at `path` and must not be
+    /// replaced.
+    fn take_save(&mut self, path: &std::path::Path) -> Option<(std::path::PathBuf, String)> {
+        use crate::persist::Opened;
+        match crate::persist::opened_save(path) {
+            Opened::Text { path, text } => Some((path, text)),
+            Opened::Missing => None,
+            Opened::Unreadable { path: bad } => {
+                if !self.keep_aside(&bad) {
+                    return None;
+                }
+                match crate::persist::opened_save(path) {
+                    Opened::Text { path, text } => Some((path, text)),
+                    Opened::Unreadable { path: bad } => {
+                        self.keep_aside(&bad);
+                        None
+                    }
+                    Opened::Missing => None,
+                }
+            }
+        }
+    }
+
     fn load_saved_ghosts(&mut self) {
         use racer_sim::ghost::GhostText;
-        let Some((path, text)) = crate::persist::opened_save(&ghosts_path()) else {
+        let Some((path, text)) = self.take_save(&ghosts_path()) else {
             return;
         };
         match racer_sim::ghost::GhostStore::classify(&text, racer_sim::SIM_EPOCH) {
@@ -832,8 +863,7 @@ impl Racer {
 
     fn load_saved_daily(&mut self) {
         use crate::daily::DailyText;
-        let Some((path, text)) = crate::persist::opened_save(&user_path(crate::daily::DAILY_FILE))
-        else {
+        let Some((path, text)) = self.take_save(&user_path(crate::daily::DAILY_FILE)) else {
             return;
         };
         match DailyRecord::classify(&text) {

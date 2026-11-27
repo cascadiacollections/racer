@@ -192,11 +192,22 @@ android-digest:
 
 # Copy the runs the game kept on the attached phone to target/runs and
 # compare them with the human-like bot (playstats; NOTES.md "Playtest
-# capture"). The files stay on the phone.
+# capture"). The files stay on the phone. A `.tmp` is included: that is a
+# run whose write finished and whose rename over the `.txt` did not, so it
+# is the run until the game next adopts it.
 pull-runs:
-    mkdir -p target/runs && touch target/runs/.gdignore
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p target/runs
+    touch target/runs/.gdignore
     "{{ adb }}" pull /sdcard/Android/data/{{ package }}/files/Documents/runs/. target/runs/
-    {{ cargo }} run --release -q -p racer-sim --bin playstats -- target/runs/run-*.txt
+    shopt -s nullglob
+    files=(target/runs/run-*.txt target/runs/run-*.tmp)
+    if ((${#files[@]} == 0)); then
+        echo "no run files in target/runs" >&2
+        exit 1
+    fi
+    {{ cargo }} run --release -q -p racer-sim --bin playstats -- "${files[@]}"
 
 # Follow the game's log on the device.
 android-log:
