@@ -197,6 +197,6 @@ only release templates are built.
 3. Build and test locally, merge, let the workflow publish, pin it. Until
    then release exports fall back to the official engine, with the warning.
 
-Trying the 4.8 beta 2 editor without moving `GODOT_VERSION` is
+Trying the 4.8 beta 3 editor without moving `GODOT_VERSION` is
 [docs/godot-48-trial.md](godot-48-trial.md). That path does not rewrite this
 pin or `tools/godot_templates.lock.json`.
